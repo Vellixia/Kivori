@@ -1,0 +1,23 @@
+[package]
+name = "kivori-asset-compiler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Host tool: compiles layered SVG art into the deterministic RGB565 asset blob (ADR-0004)."
+
+[[bin]]
+name = "kivori-asset-compiler"
+path = "src/main.rs"
+
+[dependencies]
+kivori-model = { path = "../../crates/kivori-model" }
+kivori-assets = { path = "../../crates/kivori-assets" }
+# Deterministic, pure-Rust SVG rasterization (research R-9). Host-only; not a firmware dependency.
+resvg = "0.44"
+heapless = { version = "0.8", features = ["serde"] }
+postcard = { version = "1", features = ["use-std"] }
+
+[dev-dependencies]
+kivori-assets = { path = "../../crates/kivori-assets" }
+kivori-model = { path = "../../crates/kivori-model" }

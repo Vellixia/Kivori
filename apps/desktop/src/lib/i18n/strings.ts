@@ -1,0 +1,58 @@
+// UI copy lives here (never inline in JSX) so the app is i18n-ready: a future locale adds a sibling
+// dictionary with the same shape and a selector picks between them. English is this slice's default.
+
+export const strings = {
+  appTitle: 'Kivori',
+  connectingHint: 'Connect your Kivori companion over USB to begin.',
+  connection: {
+    status: {
+      disconnected: 'Disconnected — searching for your Kivori…',
+      connecting: 'Connecting…',
+      connected: 'Connected',
+      reconnecting: 'Connection lost — reconnecting…',
+      incompatible: 'Incompatible device',
+      error: 'Connection error — retrying…',
+    },
+    attempt: 'attempt',
+    firmware: 'Firmware',
+    protocol: 'Protocol',
+    deviceId: 'Device',
+    desired: 'Desired',
+    reported: 'Reported',
+  },
+  diagnostics: {
+    heading: 'Diagnostics',
+    empty: 'No diagnostics recorded yet.',
+    live: 'Connection diagnostics',
+    columns: {
+      at: 'Time',
+      category: 'Category',
+      connection: 'State',
+      detail: 'Detail',
+    },
+    retry: 'retry',
+    seq: 'seq',
+    payloadLen: 'bytes',
+    device: 'device',
+    note: 'Diagnostics are local and redacted: no payload contents, raw device identity, or file paths.',
+  },
+  studio: {
+    heading: 'Device Studio',
+    preview: 'Companion preview (240×240)',
+    stateGroup: 'Companion state',
+    scrub: 'Timeline (ms)',
+    transport: 'Playback',
+    play: 'Play',
+    pause: 'Pause',
+    step: 'Step one frame',
+    mirror: 'Mirror to device',
+    states: {
+      booting: 'Booting',
+      idle: 'Idle',
+      happy: 'Happy',
+      busy: 'Busy',
+      sleeping: 'Sleeping',
+      offline: 'Offline',
+    },
+  },
+} as const;

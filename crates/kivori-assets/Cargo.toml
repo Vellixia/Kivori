@@ -1,0 +1,19 @@
+[package]
+name = "kivori-assets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Zero-copy runtime reader for compiled RGB565 assets/scenes (no_std, no alloc). See ADR-0004."
+
+[dependencies]
+kivori-model = { path = "../kivori-model" }
+serde = { version = "1", default-features = false, features = ["derive"] }
+postcard = { version = "1", default-features = false }
+heapless = { version = "0.8", features = ["serde"] }
+
+[dev-dependencies]
+# Integration tests are separate crates and need these in scope to build/serialize a test blob.
+kivori-model = { path = "../kivori-model" }
+postcard = { version = "1", default-features = false }
+heapless = { version = "0.8", features = ["serde"] }

@@ -1,0 +1,43 @@
+[package]
+name = "kivori-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Kivori desktop native core (Tauri v2). Host preview renders the shared canonical renderer."
+
+[[bin]]
+name = "kivori-desktop"
+path = "src/main.rs"
+
+[features]
+# Device Studio (dev-only preview commands, FR-028) is on by default so `tauri dev` includes it;
+# production/release builds strip it with `--no-default-features`.
+default = ["device-studio"]
+device-studio = []
+# DEV-ONLY: enables raw-payload hex logging paths (ADR-0005 §3). Never enable in a shipped build.
+debug-payloads = []
+
+[dependencies]
+kivori-model = { path = "../../../crates/kivori-model" }
+kivori-assets = { path = "../../../crates/kivori-assets" }
+kivori-framebuffer = { path = "../../../crates/kivori-framebuffer" }
+kivori-renderer = { path = "../../../crates/kivori-renderer" }
+kivori-protocol = { path = "../../../crates/kivori-protocol" }
+heapless = "0.8"  # fixed-capacity buffers for the shared protocol codec (no_std-friendly)
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+serialport = "4"  # production USB-serial transport (research R-5). Windows/macOS build; Linux CI needs libudev-dev.
+serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+# Build-time only: compiles the canonical asset blob into OUT_DIR so the app bundles it (no runtime resvg).
+kivori-asset-compiler = { path = "../../../tools/asset-compiler" }
+
+[dev-dependencies]
+# The asset compiler (resvg) is a BUILD/test tool only — never a desktop runtime dependency.
+# The app bundles a pre-compiled blob; tests compile one here.
+kivori-asset-compiler = { path = "../../../tools/asset-compiler" }

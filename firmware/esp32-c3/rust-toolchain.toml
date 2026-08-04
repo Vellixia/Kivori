@@ -1,0 +1,5 @@
+# Firmware toolchain pin (own workspace). ESP32-C3 = RISC-V, so stable Rust + the riscv target.
+[toolchain]
+channel = "stable"
+targets = ["riscv32imc-unknown-none-elf"]
+components = ["rustfmt", "clippy"]

@@ -1,0 +1,21 @@
+[package]
+name = "kivori-renderer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Deterministic RGB565 renderer, integer-ms timebase (no_std). Scaffold; impl in T038+."
+
+[dependencies]
+kivori-model = { path = "../kivori-model" }
+kivori-framebuffer = { path = "../kivori-framebuffer" }
+kivori-assets = { path = "../kivori-assets" }
+# Drawing stack for the layer compositor (ADR-0004): shapes, text, and raw-image sprite blits.
+embedded-graphics = "0.8"
+
+[dev-dependencies]
+# Building a test blob for the compositor tests.
+kivori-assets = { path = "../kivori-assets" }
+kivori-model = { path = "../kivori-model" }
+heapless = { version = "0.8", features = ["serde"] }
+postcard = { version = "1", default-features = false }

@@ -1,0 +1,74 @@
+//! Production USB-serial transport (research R-5).
+//!
+//! A blocking `serialport` handle behind the hardware-neutral [`SerialLink`] boundary, plus VID/PID
+//! port enumeration. The background device thread drives it. Real-device behaviour (Windows control
+//! lines, throughput, reconnect timing) is validated manually — there is no hardware in host CI, so
+//! nothing here is exercised end-to-end by automated tests.
+
+use crate::device::discovery::{is_candidate, PortCandidate, UsbId};
+use crate::device::transport::SerialLink;
+use std::io::{Read, Write};
+use std::time::Duration;
+
+/// Nominal baud (USB Serial/JTAG ignores the rate, but the API requires one).
+const BAUD: u32 = 115_200;
+
+/// Enumerates the host's serial ports, mapping USB ports to their VID/PID.
+#[must_use]
+pub fn enumerate() -> Vec<PortCandidate> {
+    serialport::available_ports()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|port| {
+            let (vid, pid) = match port.port_type {
+                serialport::SerialPortType::UsbPort(info) => (Some(info.vid), Some(info.pid)),
+                _ => (None, None),
+            };
+            PortCandidate::new(port.port_name, vid, pid)
+        })
+        .collect()
+}
+
+/// Returns the first port matching `allowlist` from a fresh enumeration (FR-001: no fixed COM port).
+#[must_use]
+pub fn first_candidate(allowlist: &[UsbId]) -> Option<String> {
+    enumerate()
+        .into_iter()
+        .find(|port| is_candidate(port, allowlist))
+        .map(|port| port.port_name)
+}
+
+/// A [`SerialLink`] over a blocking `serialport` handle configured for non-blocking reads.
+pub struct SerialPortLink {
+    port: Box<dyn serialport::SerialPort>,
+}
+
+impl SerialPortLink {
+    /// Opens `port_name` with a zero read timeout so [`SerialLink::read`] never blocks.
+    ///
+    /// # Errors
+    /// Returns the `serialport` error if the port cannot be opened (in use, access denied, removed).
+    pub fn open(port_name: &str) -> serialport::Result<Self> {
+        let port = serialport::new(port_name, BAUD)
+            .timeout(Duration::from_millis(0))
+            .open()?;
+        Ok(Self { port })
+    }
+}
+
+impl SerialLink for SerialPortLink {
+    type Error = std::io::Error;
+
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        match self.port.read(buf) {
+            Ok(n) => Ok(n),
+            // A zero-timeout read reports "no data available now" as a timeout; that is 0 bytes, not an error.
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Ok(0),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        Write::write(&mut self.port, buf)
+    }
+}

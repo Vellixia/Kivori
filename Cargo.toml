@@ -1,0 +1,29 @@
+# Root Cargo workspace — HOST targets only (see docs/adr/0001-two-workspace-cargo-split.md).
+# The ESP32-C3 firmware lives in its OWN workspace at firmware/esp32-c3/ (feature-unification firewall).
+[workspace]
+resolver = "2"
+members = [
+    "crates/kivori-model",
+    "crates/kivori-protocol",
+    "crates/kivori-framebuffer",
+    "crates/kivori-renderer",
+    "crates/kivori-assets",
+    "apps/desktop/src-tauri",
+    "tools/asset-compiler",
+    "tests/golden-frames",
+    "tests/e2e-host-sim",
+    "tools/wokwi-vectors",
+    "tools/wokwi-vcd",
+]
+# Defensive: the firmware workspace is separate (ADR-0001). It already declares its own [workspace],
+# but excluding it here makes the boundary explicit and prevents accidental absorption.
+exclude = ["firmware"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.90"
+license = "UNLICENSED"
+
+# Zero-warning gate is enforced in CI via `-D warnings` (RUSTFLAGS) and `cargo clippy -- -D warnings`
+# (see .github/workflows/host.yml), not via a manifest-level `deny` that could break local builds.

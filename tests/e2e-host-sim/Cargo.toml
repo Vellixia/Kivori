@@ -1,0 +1,19 @@
+[package]
+name = "kivori-e2e-host-sim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Host-only end-to-end harness: bridges the desktop session driver to the firmware dispatcher over an in-memory pipe (no hardware). Test-only."
+
+[lib]
+path = "src/lib.rs"
+
+# Host-only test bridge. Depending on the firmware LIB (built for the host here) is the sanctioned
+# host-sim E2E path (spec Phase 11); it does not affect the firmware's own riscv/no_std build or the
+# ADR-0001 firewall — those are a separate workspace + target.
+[dev-dependencies]
+kivori-desktop = { path = "../../apps/desktop/src-tauri" }
+kivori-firmware = { path = "../../firmware/esp32-c3" }
+kivori-model = { path = "../../crates/kivori-model" }
+kivori-protocol = { path = "../../crates/kivori-protocol" }

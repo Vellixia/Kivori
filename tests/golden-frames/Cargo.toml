@@ -1,0 +1,19 @@
+[package]
+name = "kivori-golden-frames"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Golden-frame / frame-hash determinism harness (host). Phase 4 code scene + Phase 5 assets."
+
+[dependencies]
+kivori-model = { path = "../../crates/kivori-model" }
+kivori-framebuffer = { path = "../../crates/kivori-framebuffer" }
+kivori-renderer = { path = "../../crates/kivori-renderer" }
+
+[dev-dependencies]
+kivori-model = { path = "../../crates/kivori-model" }
+kivori-framebuffer = { path = "../../crates/kivori-framebuffer" }
+kivori-renderer = { path = "../../crates/kivori-renderer" }
+kivori-assets = { path = "../../crates/kivori-assets" }
+kivori-asset-compiler = { path = "../../tools/asset-compiler" }

@@ -1,0 +1,34 @@
+# Determinism CI (SC-005/SC-009): golden frames are byte-identical across OSes, and the compiled asset
+# blob is byte-reproducible. Guards Principle III (deterministic rendering) and XI (compiled assets).
+name: determinism
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  golden-frames:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Code-scene + asset-backed golden frame-hashes must match the committed manifest on every OS.
+      - run: cargo test -p kivori-golden-frames
+
+  asset-reproducibility:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # The compiled asset blob must be byte-identical across repeated compiles.
+      - run: cargo test -p kivori-asset-compiler
+      - name: Blob is byte-reproducible across runs
+        shell: bash
+        run: |
+          cargo run -q -p kivori-asset-compiler
+          cp assets/compiled/kivori.assets /tmp/first.assets
+          cargo run -q -p kivori-asset-compiler
+          cmp assets/compiled/kivori.assets /tmp/first.assets

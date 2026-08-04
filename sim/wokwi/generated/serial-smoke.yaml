@@ -1,0 +1,16 @@
+# GENERATED FILE — do not edit.
+# Produced by `cargo run -p kivori-wokwi-vectors` from the real kivori-protocol
+# codec; every write-serial byte array below is a genuine wire frame. CI regenerates
+# this file and fails if it differs (stale vectors).
+#
+# Smallest external check: the firmware announces readiness, receives one known real frame over
+# USB Serial/JTAG, and the response path produces a marker.
+name: kivori-serial-smoke
+version: 1
+author: Kivori
+steps:
+  - wait-serial: 'KIVORI-EXT READY iface=usb-serial-jtag'
+  # ping: heartbeat — expects a Pong echoing the timestamp
+  - write-serial: [4, 86, 75, 1, 1, 1, 2, 1, 2, 3, 4, 6, 146, 33, 4, 151, 32, 204, 0]
+  - wait-serial: 'KIVORI-EXT RX kind=Ping'
+  - wait-serial: 'KIVORI-EXT TX kind=Pong echo=4242'

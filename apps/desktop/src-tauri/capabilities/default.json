@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Least-privilege capability set for the Kivori main window. No fs/shell/http/serial surface is granted to the webview (Constitution VIII); the webview reaches the device only through the app's own least-privilege commands (contracts/ipc.md).",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

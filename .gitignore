@@ -1,0 +1,25 @@
+# Rust
+/target
+**/target
+*.rs.bk
+Cargo.lock.bak
+
+# Node / frontend
+node_modules
+dist
+.vite
+*.tsbuildinfo
+
+# Generated / compiled assets (source SVGs are tracked; compiled runtime blobs are not)
+/assets/compiled
+
+# Tauri-generated capability schemas + codegen
+**/src-tauri/gen/
+
+# Env / secrets / OS / editors
+.env
+.env.*
+.DS_Store
+Thumbs.db
+.idea
+.vscode
