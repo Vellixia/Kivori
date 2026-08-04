@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "extensions": {
+    "kivori-gates": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:4056a2badcab1d2bc8d60249d0c7dcdac5e7fd0d023f1567b60d1bf57f4c0ed4",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "claude": [
+          "speckit.kivori-gates.preflight",
+          "speckit.kivori-gates.task-audit",
+          "speckit.kivori-gates.verify",
+          "speckit.kivori-gates.evidence-audit",
+          "speckit.kivori-gates.release-gate"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-08-04T04:09:20.497542+00:00"
+    }
+  }
+}
