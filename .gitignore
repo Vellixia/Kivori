@@ -23,3 +23,6 @@ dist
 Thumbs.db
 .idea
 .vscode
+
+# Spec Kit extension catalog cache — network-fetched, regenerated on demand, never source.
+.specify/extensions/.cache/
