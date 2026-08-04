@@ -26,3 +26,6 @@ Thumbs.db
 
 # Spec Kit extension catalog cache — network-fetched, regenerated on demand, never source.
 .specify/extensions/.cache/
+
+# Captured application stdout from a validation attempt is a runtime artifact, not evidence.
+docs/evidence/*-app-stdout.log
