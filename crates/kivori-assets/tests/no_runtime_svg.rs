@@ -12,7 +12,16 @@
 use std::path::{Path, PathBuf};
 
 /// Crates that parse SVG or raster images. None may be reachable from the runtime asset path.
-const BANNED: [&str; 8] = ["resvg", "usvg", "tiny-skia", "image", "png", "jpeg-decoder", "svgtypes", "roxmltree"];
+const BANNED: [&str; 8] = [
+    "resvg",
+    "usvg",
+    "tiny-skia",
+    "image",
+    "png",
+    "jpeg-decoder",
+    "svgtypes",
+    "roxmltree",
+];
 
 /// Manifests that must stay free of the banned crates: the runtime reader, every shared `no_std` crate, and
 /// the firmware. The asset *compiler* is deliberately absent — it is a host build tool and is expected to
