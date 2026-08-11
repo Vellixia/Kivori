@@ -26,13 +26,22 @@ use esp_backtrace as _;
 #[cfg(feature = "embedded")]
 static ASSETS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/kivori.assets"));
 
+#[cfg(feature = "embedded")]
+esp_bootloader_esp_idf::esp_app_desc!();
 /// Firmware entry point. `esp_hal::main` installs the vector table; it never returns.
 #[cfg(feature = "embedded")]
 #[esp_hal::main]
 fn main() -> ! {
     let peripherals = esp_hal::init(esp_hal::Config::default());
     let clock = kivori_firmware::bsp::clock();
-
+    #[cfg(feature = "physical-st7789")]
+    {
+        kivori_firmware::physical_st7789::run_mode(
+            peripherals,
+            clock,
+            ASSETS,
+        );
+    }
     // PRODUCTION RUNTIME under simulation: the same `runtime::run` the physical firmware calls, wired to
     // real peripherals through the simulation-only profile (T074 + T131 boundary).
     #[cfg(feature = "wokwi-runtime")]
@@ -75,7 +84,8 @@ fn main() -> ! {
         feature = "wokwi",
         feature = "wokwi-serial",
         feature = "wokwi-spi",
-        feature = "wokwi-runtime"
+        feature = "wokwi-runtime",
+        feature = "physical-st7789"
     )))]
     {
         // The transport and clock adapters are real and brought up here; the render loop is not entered,

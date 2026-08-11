@@ -34,6 +34,10 @@ host-sim = []
 # Wokwi pre-hardware simulation: the embedded runtime plus an in-firmware self-test harness that
 # drives the REAL dispatcher/lifecycle/renderer and asserts over serial (see sim/wokwi/README.md).
 # Simulation is an extra gate — it never replaces the host-sim tests or physical validation.
+
+physical-st7789 = ["embedded"]
+
+
 wokwi = ["embedded"]
 # Wokwi EXTERNAL serial test: the real USB Serial/JTAG receive/transmit loop, driven by Wokwi
 # `write-serial` automation injecting real wire frames (see sim/wokwi/generated/*.yaml).
@@ -75,6 +79,7 @@ embedded-hal = "1.0"
 embedded-graphics-core = "0.4"
 # Only the esp-hal board wiring needs the bus/CS wrapper, so it rides on `embedded`.
 embedded-hal-bus = { version = "0.3", default-features = false, optional = true }
+esp-bootloader-esp-idf = { version = "0.5", features = ["esp32c3"] }
 
 [build-dependencies]
 # Host-side, build-time only: compiles the canonical asset blob for the `wokwi` self-test (see build.rs).

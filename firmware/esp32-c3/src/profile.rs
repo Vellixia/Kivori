@@ -54,3 +54,21 @@ pub mod wokwi {
         PanelGeometry::new(240, 240, 0, 0)
     }
 }
+
+#[cfg(feature = "physical-st7789")]
+pub mod physical_st7789 {
+    /// SPI clock.
+    pub const SCK: u8 = 6;
+
+    /// SPI MOSI.
+    pub const MOSI: u8 = 7;
+
+    /// Data/command.
+    pub const DC: u8 = 2;
+
+    /// Display reset.
+    pub const RST: u8 = 3;
+
+    /// Backlight.
+    pub const BL: u8 = 8;
+}

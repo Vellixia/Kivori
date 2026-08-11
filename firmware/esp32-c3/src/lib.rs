@@ -50,3 +50,6 @@ pub mod transport;
 /// Wokwi PRODUCTION-RUNTIME mode: constructs ports for the real [`runtime::run`] loop (T074).
 #[cfg(feature = "wokwi-runtime")]
 pub mod wokwi_runtime;
+
+#[cfg(feature = "physical-st7789")]
+pub mod physical_st7789;
