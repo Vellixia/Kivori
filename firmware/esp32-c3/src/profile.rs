@@ -1,15 +1,12 @@
-//! Board profiles: the one place a concrete panel + pin map may be named.
+//! Board profiles: the one place concrete panel and pin-map facts are recorded.
 //!
-//! # There is exactly one profile, and it is simulation-only
+//! Two profile classes currently exist:
 //!
-//! [`wokwi`] describes `sim/wokwi/diagram-spi.json` and nothing else. **No physical Kivori profile exists**
-//! — the panel controller, the SPI/CS/D/C/RST pin map, the visible-area offsets, the orientation, the colour
-//! order, and the backlight polarity are all unconfirmed (`docs/validation-checklist.md` items 23-25). They
-//! are deliberately absent rather than guessed, because a plausible-looking default is worse than a missing
-//! one: it would compile, run, and quietly be wrong on real glass.
+//! - [`wokwi`] — simulation-only wiring for the Wokwi test environment.
+//! - [`physical_st7789`] — hardware-validated ESP32-C3 + ST7789 240x240 profile.
 //!
-//! When the hardware facts arrive, add a sibling `kivori_240` module here, gate it behind its own feature,
-//! and leave this module untouched. Nothing outside this file may name a controller.
+//! Simulation values must never be treated as physical hardware evidence.
+//! Physical profile changes require validation against real hardware.
 
 /// The simulation-only profile for `sim/wokwi/diagram-spi.json`.
 ///
@@ -29,7 +26,8 @@ pub mod wokwi {
     /// * `18`/`19` are excluded: they carry USB Serial/JTAG on this SoC, which the runtime itself uses.
     /// * `2`, `8`, `9` are excluded: ESP32-C3 strapping pins.
     ///
-    /// The Kivori board's real assignment is **not decided** and must come from the hardware design.
+    /// These pins belong only to the Wokwi simulation and are unrelated to the
+    /// validated physical Kivori ST7789 pin map.
     pub struct WokwiSpiPins;
 
     impl WokwiSpiPins {
