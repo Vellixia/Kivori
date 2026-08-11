@@ -21,8 +21,8 @@ Fill `Result` with ✅ / ❌ and date; put measurements and observations in `Not
 
 | # | Check | Target | Result | Notes |
 |---|-------|--------|--------|-------|
-| 5 | Device enumerates as `0x303A:0x1001`; auto-discovered with **no** port selection; identity confirmed via handshake | SC-001 | | |
-| 6 | Time from plug-in → `connected` | < 5 s (SC-001) | | |
+| 5 | Device enumerates as `0x303A:0x1001`; auto-discovered with **no** port selection; identity confirmed via handshake | SC-001 | ✅ 2026-08-11 | Windows detected the ESP32-C3 as `0x303A:0x1001` on COM3. Kivori Desktop auto-discovered the device with no manual port selection and completed the handshake. Desktop reported Connected, firmware 1.0.0, protocol 1.0. |
+| 6 | Time from plug-in → `connected` | < 5 s (SC-001) | | Connection was observed successfully, but plug-in → connected latency was not measured from a controlled plug-in event. |
 | 7 | An unrelated USB-serial device is **not** reported as connected | FR-004 | | |
 | 8 | A wrong-major firmware → `incompatible` with a clear reason, no state commands sent | < 5 s (SC-003) | | |
 
@@ -30,10 +30,10 @@ Fill `Result` with ✅ / ❌ and date; put measurements and observations in `Not
 
 | # | Check | Target | Result | Notes |
 |---|-------|--------|--------|-------|
-| 9 | Display initialization + panel offsets correct (GC9A01 / ST7789) | R-3 | | |
-| 10 | Each of `idle/happy/busy/sleeping` shows the matching animated scene | — | | |
-| 11 | State change appears on the device | < 1 s (SC-004) | | |
-| 12 | On-device image matches the Device Studio preview for a fixed state + elapsed time | SC-005 | | |
+| 9 | Display initialization + panel offsets correct (GC9A01 / ST7789) | R-3 | ✅ 2026-08-11 | Physical ST7789 240x240 initialized successfully on ESP32-C3. Kivori rendered correctly using physical geometry 240x240 with offset `(0,0)`. |
+| 10 | Each of `idle/happy/busy/sleeping` shows the matching animated scene | — | | `idle` confirmed on the physical ST7789. `happy`, `busy`, and `sleeping` still need physical verification. |
+| 11 | State change appears on the device | < 1 s (SC-004) | | Desktop → device `idle` state propagation was observed, but latency was not measured. |
+| 12 | On-device image matches the Device Studio preview for a fixed state + elapsed time | SC-005 | | Device Studio currently cannot be used for this check because the default desktop `device-studio` build still stack-overflows on Windows. |
 | 13 | Sustainable SPI frame rate (full-frame vs tile updates) recorded | SC-004 / R-4 | | |
 | 14 | Only semantic state is sent (verified via safe diagnostics, not payload bytes) | FR-015 | | |
 
@@ -54,10 +54,40 @@ Fill `Result` with ✅ / ❌ and date; put measurements and observations in `Not
 | 20 | End-to-end latencies within targets: state < 1 s, connect < 5 s, reconnect+restore < 10 s | SC-001/002/004 | | |
 | 21 | esp-hal `usb_serial_jtag` `unstable` API behaves as documented on the pinned version | R-2/R-11 | | |
 | 22 | No sensitive data appears in the diagnostics view or the log file while connected | SC-010 | | |
-| 23 | **Panel controller identified** on the physical module (GC9A01 vs ST7789) and `DeviceProfile::KIVORI_240.controller` updated to match | R-3 | | |
-| 24 | **Real SPI pin map recorded** (SCK / MOSI / CS / D/C / RST / backlight) — the `wokwi-spi` profile is simulation-only and must not be reused | R-3 | | |
-| 25 | Panel offsets measured on the physical module and passed to `PanelGeometry` (there is no default) | R-3 | | |
+| 23 | **Panel controller identified** on the physical module (GC9A01 vs ST7789) and `DeviceProfile::KIVORI_240.controller` updated to match | R-3 | ✅ 2026-08-11 | Physical panel confirmed as ST7789. Shared `DeviceProfile::KIVORI_240.controller` reconciled to `PanelController::St7789`. |
+| 24 | **Real SPI pin map recorded** (SCK / MOSI / CS / D/C / RST / backlight) — the `wokwi-spi` profile is simulation-only and must not be reused | R-3 | ✅ 2026-08-11 | Verified physical profile: SCK GPIO6, MOSI GPIO7, CS unused, D/C GPIO2, RST GPIO3, backlight GPIO8 active-high. SPI2 runs at 20 MHz, Mode 3. Physical panel uses RGB color order, 90° rotation, and inversion enabled. |
+| 25 | Panel offsets measured on the physical module and passed to `PanelGeometry` (there is no default) | R-3 | ✅ 2026-08-11 | Physical ST7789 uses a 240x240 visible area at controller offset `(0,0)`. Kivori rendered correctly on the physical panel using this geometry. |
 
-Items 23–25 are the facts the Wokwi generic SPI probe deliberately does **not** supply. The probe validates
-bus behaviour and the RGB565 tile stream; the controller, its init sequence, its offsets, and the board pin
-map can only come from hardware.
+Items 23–25 are physical facts established from the real ESP32-C3 + ST7789 hardware. The Wokwi generic
+SPI probe remains simulation-only and does not establish controller identity, physical pin routing,
+panel offsets, orientation, color order, inversion, backlight polarity, or electrical timing margins.
+
+## Verified physical Kivori profile
+
+The physical hardware validated on 2026-08-11 is:
+
+| Property | Verified value |
+|----------|----------------|
+| MCU | ESP32-C3 |
+| USB | Native USB Serial/JTAG |
+| USB VID:PID | `0x303A:0x1001` |
+| Display controller | ST7789 |
+| Resolution | 240x240 |
+| Pixel format | RGB565 |
+| SPI peripheral | SPI2 |
+| SPI clock | 20 MHz |
+| SPI mode | Mode 3 |
+| SCK | GPIO6 |
+| MOSI | GPIO7 |
+| MISO | Unused |
+| CS | Unused |
+| D/C | GPIO2 |
+| Reset | GPIO3 |
+| Backlight | GPIO8, active-high |
+| Panel offset | `(0,0)` |
+| Rotation | 90° |
+| Color order | RGB |
+| Color inversion | Enabled |
+
+This profile is the physical Kivori hardware profile. It must remain separate from the Wokwi simulation
+profile.

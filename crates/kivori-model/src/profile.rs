@@ -61,7 +61,7 @@ impl DeviceProfile {
         width: 240,
         height: 240,
         color: ColorFormat::Rgb565,
-        controller: PanelController::Gc9a01,
+        controller: PanelController::St7789,
         tile: TileConfig {
             tile_w: 240,
             tile_h: 40,

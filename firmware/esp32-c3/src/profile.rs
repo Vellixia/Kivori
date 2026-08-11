@@ -55,20 +55,95 @@ pub mod wokwi {
     }
 }
 
+/// Verified physical ESP32-C3 + ST7789 240x240 hardware profile.
 #[cfg(feature = "physical-st7789")]
 pub mod physical_st7789 {
-    /// SPI clock.
+    use crate::display::PanelGeometry;
+    use esp_hal::{gpio::Level, spi::Mode};
+    use mipidsi::{
+        models::ST7789,
+        options::{ColorInversion, ColorOrder, Orientation, Rotation},
+    };
+
+    /// SPI clock pin.
     pub const SCK: u8 = 6;
 
-    /// SPI MOSI.
+    /// SPI MOSI pin.
     pub const MOSI: u8 = 7;
 
-    /// Data/command.
+    /// Display data/command pin.
     pub const DC: u8 = 2;
 
-    /// Display reset.
+    /// Display reset pin.
     pub const RST: u8 = 3;
 
-    /// Backlight.
+    /// Display backlight pin.
     pub const BL: u8 = 8;
+
+    /// This physical panel does not use chip select.
+    pub const CS: Option<u8> = None;
+
+    /// Verified SPI clock.
+    pub const SPI_CLOCK_HZ: u32 = 20_000_000;
+
+    /// Visible panel width.
+    pub const WIDTH: u16 = 240;
+
+    /// Visible panel height.
+    pub const HEIGHT: u16 = 240;
+
+    /// Verified visible-area X offset.
+    pub const OFFSET_X: u16 = 0;
+
+    /// Verified visible-area Y offset.
+    pub const OFFSET_Y: u16 = 0;
+
+    /// Backlight is enabled by driving the pin high.
+    pub const BACKLIGHT_ACTIVE_HIGH: bool = true;
+
+    /// Verified physical display geometry.
+    #[must_use]
+    pub const fn geometry() -> PanelGeometry {
+        PanelGeometry::new(WIDTH, HEIGHT, OFFSET_X, OFFSET_Y)
+    }
+
+    /// Verified SPI mode.
+    #[must_use]
+    pub const fn spi_mode() -> Mode {
+        Mode::_3
+    }
+
+    /// Verified physical panel controller.
+    #[must_use]
+    pub const fn panel_model() -> ST7789 {
+        ST7789
+    }
+
+    /// Verified panel orientation.
+    #[must_use]
+    pub fn orientation() -> Orientation {
+        Orientation::new().rotate(Rotation::Deg90)
+    }
+
+    /// Verified panel color order.
+    #[must_use]
+    pub const fn color_order() -> ColorOrder {
+        ColorOrder::Rgb
+    }
+
+    /// Verified panel color inversion.
+    #[must_use]
+    pub const fn color_inversion() -> ColorInversion {
+        ColorInversion::Inverted
+    }
+
+    /// Backlight output level.
+    #[must_use]
+    pub const fn backlight_level() -> Level {
+        if BACKLIGHT_ACTIVE_HIGH {
+            Level::High
+        } else {
+            Level::Low
+        }
+    }
 }

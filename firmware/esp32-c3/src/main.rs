@@ -36,11 +36,7 @@ fn main() -> ! {
     let clock = kivori_firmware::bsp::clock();
     #[cfg(feature = "physical-st7789")]
     {
-        kivori_firmware::physical_st7789::run_mode(
-            peripherals,
-            clock,
-            ASSETS,
-        );
+        kivori_firmware::physical_st7789::run_mode(peripherals, clock, ASSETS);
     }
     // PRODUCTION RUNTIME under simulation: the same `runtime::run` the physical firmware calls, wired to
     // real peripherals through the simulation-only profile (T074 + T131 boundary).
@@ -101,7 +97,11 @@ fn main() -> ! {
         let _ = (&mut serial, ASSETS);
     }
 
-    #[cfg(not(any(feature = "wokwi-serial", feature = "wokwi-runtime")))]
+    #[cfg(not(any(
+        feature = "wokwi-serial",
+        feature = "wokwi-runtime",
+        feature = "physical-st7789"
+    )))]
     loop {
         // The self-test/probe has printed its verdict, or the production profile is pending.
         esp_hal::delay::Delay::new().delay_millis(1000);
