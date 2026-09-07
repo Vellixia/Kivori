@@ -301,7 +301,10 @@ fn rgb565_pixels_go_out_big_endian() {
         .args;
     assert_eq!(data.len(), TILE_PIXELS * 2);
     assert!(
-        data.chunks_exact(2).all(|p| p == [0xF8, 0x00]),
+        data.as_chunks::<2>()
+            .0
+            .iter()
+            .all(|p| *p == [0xF8, 0x00]),
         "every pixel must be the high byte first"
     );
 }
