@@ -53,15 +53,17 @@ describe('Device Studio Controls', () => {
     expect(useStudioStore.getState().playing).toBe(true);
   });
 
-  it('mirror is disabled for non-sendable states', () => {
+  it('mirror is disabled for non-sendable states', async () => {
     useStudioStore.setState({ state: 'offline' });
     render(<Controls />);
+    await screen.findByRole('slider', { name: strings.studio.scrub });
     expect(screen.getByRole('button', { name: strings.studio.mirror })).toBeDisabled();
   });
 
-  it('marks the current state as the pressed toggle', () => {
+  it('marks the current state as the pressed toggle', async () => {
     useStudioStore.setState({ state: 'busy' });
     render(<Controls />);
+    await screen.findByRole('slider', { name: strings.studio.scrub });
     expect(screen.getByRole('button', { name: strings.studio.states.busy })).toHaveAttribute(
       'aria-pressed',
       'true',
