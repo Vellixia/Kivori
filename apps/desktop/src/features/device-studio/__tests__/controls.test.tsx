@@ -68,13 +68,15 @@ describe('Device Studio Controls', () => {
     );
   });
 
-  it('exposes the timeline as an accessible slider', () => {
+  it('exposes the timeline as an accessible slider', async () => {
     render(<Controls />);
-    expect(screen.getByRole('slider', { name: strings.studio.scrub })).toBeInTheDocument();
+    expect(await screen.findByRole('slider', { name: strings.studio.scrub })).toBeInTheDocument();
   });
 
   it('has no axe accessibility violations', async () => {
     const { container } = render(<Controls />);
+    // Wait for Base UI's edge-aligned slider to complete its post-layout positioning before scanning.
+    await screen.findByRole('slider', { name: strings.studio.scrub });
     // color-contrast can't be computed under jsdom (no canvas text metrics); the rest still runs.
     const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } });
     expect(results.violations).toEqual([]);
