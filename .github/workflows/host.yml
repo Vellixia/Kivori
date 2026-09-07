@@ -5,42 +5,7 @@ on:
     branches: [main]
   pull_request:
 
-permissions:
-  contents: write
-
 jobs:
-  frontend-migration:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.2
-      - run: bun install
-      - name: Generate base-nova shadcn primitives
-        run: |
-          cd apps/desktop
-          bunx shadcn@4.21.0 add button card badge tabs separator slider toggle toggle-group scroll-area table --yes --overwrite
-      - name: Format generated migration files
-        run: bun x prettier --write apps/desktop/src/index.css apps/desktop/src/components/ui/*.tsx
-      - name: Remove pnpm workspace files
-        run: rm -f pnpm-lock.yaml pnpm-workspace.yaml
-      - name: Commit migration artifacts to PR branch
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A bun.lock pnpm-lock.yaml pnpm-workspace.yaml apps/desktop/src/index.css apps/desktop/src/components/ui
-          if git diff --cached --quiet; then
-            echo "No migration artifacts changed."
-          else
-            git commit -m "build(frontend): lock Bun and add shadcn primitives"
-            git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
-          fi
-
   rust:
     strategy:
       matrix:
@@ -82,13 +47,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
-      - run: bun install
-      - name: Capture Bun lockfile for migration
-        uses: actions/upload-artifact@v4
-        with:
-          name: bun-lock
-          path: bun.lock
-          if-no-files-found: error
+      - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run lint
       - run: bun run format
@@ -107,7 +66,7 @@ jobs:
         with:
           bun-version: 1.4.2
       - uses: dtolnay/rust-toolchain@stable
-      - run: bun install
+      - run: bun install --frozen-lockfile
       - name: Build Device Studio frontend
         run: bun --filter kivori-desktop-ui build
       - name: Build Device Studio native binary
