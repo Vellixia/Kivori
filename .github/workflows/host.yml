@@ -50,7 +50,10 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run lint
-      - run: bun run format
+      - name: Show canonical Prettier diff
+        run: |
+          bun run format:write
+          git diff --exit-code
       - run: bun run test
       - run: bun run build
       - name: Frontend offline-asset guard (FR-029, SC-006)
