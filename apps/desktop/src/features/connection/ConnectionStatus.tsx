@@ -4,7 +4,7 @@ import {
   CheckCircle2,
   LoaderCircle,
   TriangleAlert,
-  UsbOff,
+  Unplug,
   type LucideIcon,
 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge';
@@ -24,7 +24,7 @@ type UiStatus =
   | 'error';
 
 const STATUS_ICONS: Record<UiStatus, LucideIcon> = {
-  disconnected: UsbOff,
+  disconnected: Unplug,
   connecting: LoaderCircle,
   connected: CheckCircle2,
   reconnecting: LoaderCircle,
