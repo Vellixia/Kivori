@@ -63,11 +63,7 @@ fn main() -> ! {
 
     #[cfg(feature = "physical-st7789")]
     {
-        kivori_firmware::physical_st7789::run_mode(
-            peripherals,
-            clock,
-            ASSETS,
-        );
+        kivori_firmware::physical_st7789::run_mode(peripherals, clock, ASSETS);
     }
 
     // -------------------------------------------------------------------------
@@ -77,16 +73,9 @@ fn main() -> ! {
     // simulation-only board/display profile.
     // -------------------------------------------------------------------------
 
-    #[cfg(all(
-        feature = "wokwi-runtime",
-        not(feature = "physical-st7789")
-    ))]
+    #[cfg(all(feature = "wokwi-runtime", not(feature = "physical-st7789")))]
     {
-        kivori_firmware::wokwi_runtime::run_mode(
-            peripherals,
-            clock,
-            ASSETS,
-        );
+        kivori_firmware::wokwi_runtime::run_mode(peripherals, clock, ASSETS);
     }
 
     // -------------------------------------------------------------------------
@@ -104,13 +93,9 @@ fn main() -> ! {
     {
         use kivori_firmware::ports::Clock;
 
-        let mut io =
-            kivori_firmware::bsp::serial(peripherals.USB_DEVICE);
+        let mut io = kivori_firmware::bsp::serial(peripherals.USB_DEVICE);
 
-        kivori_firmware::external::run(
-            &mut io,
-            || clock.now_ms(),
-        );
+        kivori_firmware::external::run(&mut io, || clock.now_ms());
     }
 
     // -------------------------------------------------------------------------
@@ -127,8 +112,7 @@ fn main() -> ! {
         not(feature = "physical-st7789")
     ))]
     {
-        let _passed =
-            kivori_firmware::spi_probe::run(peripherals);
+        let _passed = kivori_firmware::spi_probe::run(peripherals);
 
         let _ = &clock;
     }
@@ -145,8 +129,7 @@ fn main() -> ! {
         not(feature = "physical-st7789")
     ))]
     {
-        let _passed =
-            kivori_firmware::selftest::run(&clock);
+        let _passed = kivori_firmware::selftest::run(&clock);
 
         let _ = peripherals;
     }
@@ -169,8 +152,7 @@ fn main() -> ! {
     {
         use kivori_firmware::ports::Clock;
 
-        let mut serial =
-            kivori_firmware::bsp::serial(peripherals.USB_DEVICE);
+        let mut serial = kivori_firmware::bsp::serial(peripherals.USB_DEVICE);
 
         let boot_ms = clock.now_ms();
 
@@ -192,7 +174,6 @@ fn main() -> ! {
         feature = "physical-st7789"
     )))]
     loop {
-        esp_hal::delay::Delay::new()
-            .delay_millis(1000);
+        esp_hal::delay::Delay::new().delay_millis(1000);
     }
 }
