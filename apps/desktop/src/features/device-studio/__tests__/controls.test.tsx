@@ -27,7 +27,9 @@ beforeEach(() => {
   // jsdom has no layout engine and otherwise reports 0x0 rectangles, which keeps the real nested
   // input[type=range] hidden from the accessibility tree. Provide realistic geometry so this test
   // exercises the same accessible control that a browser exposes after layout.
-  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+    this: HTMLElement,
+  ) {
     return this.getAttribute('data-slot') === 'slider-thumb' ? rect(12, 12) : rect(240, 12);
   });
 });
