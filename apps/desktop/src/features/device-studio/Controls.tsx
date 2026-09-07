@@ -1,4 +1,8 @@
 import type { ReactElement } from 'react';
+import { Pause, Play, Send, StepForward } from 'lucide-react';
+import { Button } from '../../components/ui/button';
+import { Slider } from '../../components/ui/slider';
+import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
 import { mirrorState } from '../../lib/ipc';
 import type { CompanionState, SendableState } from '../../lib/ipc/types';
 import { COMPANION_STATES, SENDABLE_STATES } from '../../lib/ipc/types';
@@ -21,53 +25,62 @@ export function Controls(): ReactElement {
   const canMirror = SENDABLE.has(state);
 
   return (
-    <div className="studio-controls">
-      <fieldset>
-        <legend>{t.stateGroup}</legend>
-        <div role="radiogroup" aria-label={t.stateGroup} className="state-group">
+    <div className="studio-controls space-y-6">
+      <fieldset className="space-y-3">
+        <legend className="text-sm font-medium">{t.stateGroup}</legend>
+        <ToggleGroup
+          aria-label={t.stateGroup}
+          value={[state]}
+          onValueChange={(value) => {
+            const nextState = value[0] as CompanionState | undefined;
+            if (nextState) setState(nextState);
+          }}
+          variant="outline"
+          className="flex-wrap"
+        >
           {COMPANION_STATES.map((candidate) => (
-            <button
-              key={candidate}
-              type="button"
-              role="radio"
-              aria-checked={state === candidate}
-              onClick={() => setState(candidate)}
-            >
+            <ToggleGroupItem key={candidate} value={candidate}>
               {t.states[candidate]}
-            </button>
+            </ToggleGroupItem>
           ))}
-        </div>
+        </ToggleGroup>
       </fieldset>
 
-      <label className="scrub">
-        <span>{t.scrub}</span>
-        <input
-          type="range"
+      <div className="scrub space-y-2">
+        <div className="flex items-center justify-between gap-3 text-sm">
+          <span>{t.scrub}</span>
+          <output className="font-mono text-muted-foreground">{elapsedMs}</output>
+        </div>
+        <Slider
+          aria-label={t.scrub}
           min={0}
           max={SCENE_DURATION_MS}
           step={STEP_MS}
           value={elapsedMs}
-          onChange={(event) => seek(Number(event.target.value))}
+          onValueChange={(value) => seek(Array.isArray(value) ? (value[0] ?? 0) : value)}
         />
-        <output>{elapsedMs}</output>
-      </label>
+      </div>
 
-      <div className="transport" role="group" aria-label={t.transport}>
-        <button type="button" onClick={toggle} aria-pressed={playing}>
+      <div className="transport flex flex-wrap gap-2" role="group" aria-label={t.transport}>
+        <Button type="button" onClick={toggle} aria-pressed={playing}>
+          {playing ? <Pause data-icon="inline-start" /> : <Play data-icon="inline-start" />}
           {playing ? t.pause : t.play}
-        </button>
-        <button type="button" onClick={() => step()}>
+        </Button>
+        <Button type="button" variant="outline" onClick={() => step()}>
+          <StepForward data-icon="inline-start" />
           {t.step}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="outline"
           disabled={!canMirror}
           onClick={() => {
             if (canMirror) void mirrorState(state as SendableState);
           }}
         >
+          <Send data-icon="inline-start" />
           {t.mirror}
-        </button>
+        </Button>
       </div>
     </div>
   );

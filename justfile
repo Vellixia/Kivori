@@ -5,25 +5,25 @@ set shell := ["bash", "-uc"]
 default:
     @just --list
 
-# ---- host workspace (root Cargo workspace + pnpm) ----
+# ---- host workspace (root Cargo workspace + Bun) ----
 
 # Format, clippy, eslint, typecheck, prettier.
 lint:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
-    pnpm exec eslint .
-    pnpm -r --if-present typecheck
-    pnpm exec prettier --check .
+    bun run lint
+    bun run typecheck
+    bun run format
 
 # Host workspace + frontend tests.
 test:
     cargo test --workspace
-    pnpm -r --if-present test
+    bun run test
 
 # Build the host workspace + frontend.
 build:
     cargo build --workspace
-    pnpm -r --if-present build
+    bun run build
 
 # ---- firmware (isolated workspace; ADR-0001) ----
 # no_std isolation proof: compile ONLY the shared crates for the RISC-V target from the firmware
@@ -95,4 +95,4 @@ check-boundaries:
 
 # Run the desktop UI dev server.
 dev:
-    pnpm --filter kivori-desktop-ui dev
+    bun --filter kivori-desktop-ui dev

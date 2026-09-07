@@ -3,10 +3,8 @@
 # ADDITIONAL gate only. host.yml + firmware.yml remain the PRIMARY gates, and a green run here is never
 # evidence of physical hardware correctness.
 #
-# Making this a required check (after the gate has run green at least once):
-#   Settings → Branches → branch protection rule for `main` → "Require status checks to pass" →
-#   add `wokwi / simulate`. Do this only once WOKWI_CLI_TOKEN is configured, otherwise the neutral skip
-#   below would block merges.
+# A green result from this workflow requires an actual Wokwi simulation run. Offline vector/build checks
+# are useful preflight evidence, but they must never produce a green Wokwi badge by themselves.
 name: wokwi
 on:
   push:
@@ -22,17 +20,17 @@ jobs:
         with:
           targets: riscv32imc-unknown-none-elf
 
-      - name: Check for a Wokwi CI token
+      - name: Detect Wokwi CI token
         id: token
         env:
           WOKWI_CLI_TOKEN: ${{ secrets.WOKWI_CLI_TOKEN }}
         run: |
-          # Presence only — the value is never printed, logged, or passed as an argument.
+          # Presence only. The value is never printed, logged, or passed as an argument.
           if [ -n "$WOKWI_CLI_TOKEN" ]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Wokwi gate skipped::WOKWI_CLI_TOKEN is not configured. Add the repository secret (https://wokwi.com/dashboard/ci) to enable the simulation gate."
+            echo "::warning title=Wokwi simulation unavailable::WOKWI_CLI_TOKEN is not configured. Offline preflight checks will run, but this workflow will fail before claiming Wokwi simulation success."
           fi
 
       # Vectors are generated from the real kivori-protocol codec. Regenerate and fail on any diff, so a
@@ -63,6 +61,14 @@ jobs:
       - name: Build all four simulation firmware artifacts (RISC-V ELFs)
         run: bash scripts/build-wokwi-firmware.sh
 
+      # Do not allow the offline preflight above to masquerade as a successful Wokwi simulation. If the
+      # token is missing, the workflow must be red so reviewers can see that no simulator actually ran.
+      - name: Require Wokwi CI token for simulation gate
+        if: steps.token.outputs.available != 'true'
+        run: |
+          echo "::error title=Wokwi simulation did not run::WOKWI_CLI_TOKEN is missing. Configure a CI token from https://wokwi.com/dashboard/ci as the repository secret WOKWI_CLI_TOKEN, then rerun this workflow."
+          exit 1
+
       - name: Install the official Wokwi CLI
         if: steps.token.outputs.available == 'true'
         run: |
@@ -70,8 +76,7 @@ jobs:
           echo "$HOME/.wokwi/bin" >> "$GITHUB_PATH"
 
       # Every scenario runs explicitly, so a missing scenario cannot be mistaken for a pass. The step
-      # fails on any scenario failure — including an authentication failure, which is NOT skipped
-      # silently once the secret is present.
+      # fails on any scenario failure, including authentication failure.
       - name: Wokwi scenario — boot (internal self-test)
         if: steps.token.outputs.available == 'true'
         env:

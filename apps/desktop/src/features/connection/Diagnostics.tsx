@@ -1,5 +1,22 @@
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
+import { Badge } from '../../components/ui/badge';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '../../components/ui/card';
+import { ScrollArea } from '../../components/ui/scroll-area';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../../components/ui/table';
 import { getDiagnostics, onDiagnostic, type Unlisten } from '../../lib/ipc';
 import type { DiagnosticEventDto } from '../../lib/ipc/types';
 import { strings } from '../../lib/i18n/strings';
@@ -47,28 +64,50 @@ export function Diagnostics(): ReactElement {
   const t = strings.diagnostics;
   return (
     <section aria-labelledby="diag-heading" className="diagnostics">
-      <h2 id="diag-heading">{t.heading}</h2>
-      {events.length === 0 ? (
-        <p className="diag-empty">{t.empty}</p>
-      ) : (
-        <div role="log" aria-live="polite" aria-label={t.live} className="diag-log">
-          <ul className="diag-list">
-            {events.map((event, index) => (
-              <li
-                key={`${event.at}-${index}`}
-                className="diag-entry"
-                data-category={event.category}
-              >
-                <time dateTime={event.at}>{event.at}</time>
-                <span className="diag-category">{event.category}</span>
-                <span className="diag-connection">{event.connection}</span>
-                <span className="diag-detail">{detail(event)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      <p className="diag-note">{t.note}</p>
+      <Card>
+        <CardHeader>
+          <CardTitle id="diag-heading">{t.heading}</CardTitle>
+          <CardDescription>{t.note}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {events.length === 0 ? (
+            <p className="diag-empty text-sm text-muted-foreground">{t.empty}</p>
+          ) : (
+            <ScrollArea className="max-h-96">
+              <div role="log" aria-live="polite" aria-label={t.live} className="diag-log">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{t.columns.at}</TableHead>
+                      <TableHead>{t.columns.category}</TableHead>
+                      <TableHead>{t.columns.connection}</TableHead>
+                      <TableHead>{t.columns.detail}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {events.map((event, index) => (
+                      <TableRow key={`${event.at}-${index}`} data-category={event.category}>
+                        <TableCell>
+                          <time dateTime={event.at}>{event.at}</time>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{event.category}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="secondary">{event.connection}</Badge>
+                        </TableCell>
+                        <TableCell className="whitespace-normal text-muted-foreground">
+                          {detail(event)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </ScrollArea>
+          )}
+        </CardContent>
+      </Card>
     </section>
   );
 }

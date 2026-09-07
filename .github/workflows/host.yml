@@ -44,14 +44,33 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: corepack enable
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm -r --if-present typecheck
-      - run: pnpm exec eslint .
-      - run: pnpm exec prettier --check .
-      - run: pnpm -r --if-present test
-      - run: pnpm -r --if-present build
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun run format
+      - run: bun run test
+      - run: bun run build
       - name: Frontend offline-asset guard (FR-029, SC-006)
         run: node scripts/check-frontend-offline.mjs
       - name: Production mock-exclusion guard (T124, FR-028)
         run: node scripts/check-mock-excluded.mjs
+
+  windows-device-studio-startup:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: dtolnay/rust-toolchain@stable
+      - run: bun install --frozen-lockfile
+      - name: Build Device Studio frontend
+        run: bun --filter kivori-desktop-ui build
+      - name: Build Device Studio native binary
+        run: cargo build -p kivori-desktop
+      - name: Launch Device Studio and verify startup
+        shell: powershell
+        run: .\scripts\test-windows-device-studio-startup.ps1

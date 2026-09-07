@@ -1,4 +1,0 @@
-# pnpm workspace (frontend + shared UI). The Rust `src-tauri` belongs to the Cargo root workspace.
-packages:
-  - 'apps/*'
-  - 'packages/*'

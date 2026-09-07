@@ -2,15 +2,19 @@
   "name": "kivori",
   "version": "0.0.0",
   "private": true,
-  "packageManager": "pnpm@9.15.0",
+  "packageManager": "bun@1.4.2",
   "engines": {
     "node": ">=20"
   },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "lint": "eslint .",
-    "typecheck": "pnpm -r --if-present typecheck",
-    "test": "pnpm -r --if-present test",
-    "build": "pnpm -r --if-present build",
+    "typecheck": "bun run --parallel --workspaces --if-present typecheck",
+    "test": "bun run --parallel --workspaces --if-present test",
+    "build": "bun run --parallel --workspaces --if-present build",
     "format": "prettier --check .",
     "format:write": "prettier --write ."
   },

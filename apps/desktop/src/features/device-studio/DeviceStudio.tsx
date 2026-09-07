@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { DevicePreview } from '../../lib/canvas/DevicePreview';
 import { openPreviewStream, type PreviewStream } from '../../lib/ipc';
 import { PREVIEW_FPS } from '../../lib/ipc/types';
@@ -60,15 +61,33 @@ export function DeviceStudio(): ReactElement {
 
   const t = strings.studio;
   return (
-    <section aria-labelledby="studio-heading" className="device-studio">
-      <h1 id="studio-heading">{t.heading}</h1>
-      <DevicePreview
-        state={state}
-        elapsedMs={elapsedMs}
-        label={t.preview}
-        frame={playing ? streamFrame : null}
-      />
-      <Controls />
+    <section aria-labelledby="studio-heading" className="device-studio space-y-4">
+      <h2 id="studio-heading" className="text-xl font-semibold tracking-tight">
+        {t.heading}
+      </h2>
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,0.8fr)]">
+        <Card>
+          <CardHeader>
+            <CardTitle>{t.preview}</CardTitle>
+          </CardHeader>
+          <CardContent className="flex justify-center">
+            <DevicePreview
+              state={state}
+              elapsedMs={elapsedMs}
+              label={t.preview}
+              frame={playing ? streamFrame : null}
+            />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>{t.controls}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Controls />
+          </CardContent>
+        </Card>
+      </div>
     </section>
   );
 }

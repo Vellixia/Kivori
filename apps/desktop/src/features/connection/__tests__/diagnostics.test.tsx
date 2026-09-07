@@ -49,14 +49,14 @@ describe('Diagnostics view', () => {
     expect(screen.queryByRole('log')).not.toBeInTheDocument();
   });
 
-  it('renders recorded entries from the initial snapshot', async () => {
+  it('renders recorded entries in the diagnostics table', async () => {
     h.initial.events = [
       event({ at: '2026-07-24T10:00:01Z', category: 'io', connection: 'error', retryCount: 2 }),
       event({ at: '2026-07-24T10:00:02Z', category: 'version', connection: 'incompatible' }),
     ];
     render(<Diagnostics />);
     await waitFor(() => expect(screen.getByRole('log')).toBeInTheDocument());
-    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+    expect(screen.getAllByRole('row')).toHaveLength(3);
     expect(screen.getByText('io')).toBeInTheDocument();
     expect(screen.getByText('incompatible')).toBeInTheDocument();
     expect(screen.getByText(new RegExp(`${strings.diagnostics.retry} 2`))).toBeInTheDocument();
@@ -65,10 +65,10 @@ describe('Diagnostics view', () => {
   it('appends live events pushed from the native runtime', async () => {
     h.initial.events = [event({ category: 'handshake' })];
     render(<Diagnostics />);
-    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(1));
+    await waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(2));
 
     act(() => h.emit.fn?.(event({ at: '2026-07-24T10:05:00Z', category: 'timeout' })));
-    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(3));
     expect(screen.getByText('timeout')).toBeInTheDocument();
   });
 
@@ -77,12 +77,12 @@ describe('Diagnostics view', () => {
       event({ at: `2026-07-24T10:00:${String(i).padStart(2, '0')}Z`, elapsedMs: i }),
     );
     render(<Diagnostics />);
-    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(VIEW_LIMIT));
+    await waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(VIEW_LIMIT + 1));
 
-    // Pushing more keeps the cap and drops the oldest.
+    // Pushing more keeps the cap and drops the oldest. The extra row is the table header.
     act(() => h.emit.fn?.(event({ at: '2026-07-24T11:11:11Z', category: 'busy' })));
     await waitFor(() => expect(screen.getByText('busy')).toBeInTheDocument());
-    expect(screen.getAllByRole('listitem')).toHaveLength(VIEW_LIMIT);
+    expect(screen.getAllByRole('row')).toHaveLength(VIEW_LIMIT + 1);
     expect(screen.queryByText('2026-07-24T10:00:00Z')).not.toBeInTheDocument();
   });
 

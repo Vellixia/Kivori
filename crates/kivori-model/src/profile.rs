@@ -91,11 +91,7 @@ impl DeviceProfile {
     /// Returns [`ProfileError::TilesDoNotTileExactly`] if the configured tile
     /// dimensions do not evenly cover the complete display.
     pub fn validate(self) -> Result<(), ProfileError> {
-        if self.width == 0
-            || self.height == 0
-            || self.tile.tile_w == 0
-            || self.tile.tile_h == 0
-        {
+        if self.width == 0 || self.height == 0 || self.tile.tile_w == 0 || self.tile.tile_h == 0 {
             return Err(ProfileError::ZeroDimension);
         }
 

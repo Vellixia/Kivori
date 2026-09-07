@@ -4,7 +4,13 @@
 export const strings = {
   appTitle: 'Kivori',
   connectingHint: 'Connect your Kivori companion over USB to begin.',
+  navigation: {
+    overview: 'Overview',
+    studio: 'Device Studio',
+    diagnostics: 'Diagnostics',
+  },
   connection: {
+    heading: 'Connection',
     status: {
       disconnected: 'Disconnected — searching for your Kivori…',
       connecting: 'Connecting…',
@@ -39,6 +45,7 @@ export const strings = {
   studio: {
     heading: 'Device Studio',
     preview: 'Companion preview (240×240)',
+    controls: 'Controls',
     stateGroup: 'Companion state',
     scrub: 'Timeline (ms)',
     transport: 'Playback',

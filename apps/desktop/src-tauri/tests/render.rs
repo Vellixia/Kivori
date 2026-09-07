@@ -19,7 +19,10 @@ fn preview_is_full_frame_and_opaque() {
     let rgba = render_preview_rgba(&blob, CompanionState::Idle, 0);
     assert_eq!(rgba.len(), RGBA_LEN, "240x240 RGBA8888");
     // Every 4th byte is the alpha channel: the Canvas blit expects a fully opaque frame.
-    assert!(rgba.chunks_exact(4).all(|px| px[3] == 0xFF), "opaque");
+    assert!(
+        rgba.as_chunks::<4>().0.iter().all(|px| px[3] == 0xFF),
+        "opaque"
+    );
 }
 
 #[test]
@@ -47,6 +50,10 @@ fn matches_canonical_rgb565_channels() {
     let bytes = blob_bytes();
     let blob = AssetBlob::parse(&bytes).expect("valid blob");
     let rgba = render_preview_rgba(&blob, CompanionState::Happy, 0);
-    let non_black = rgba.chunks_exact(4).any(|px| px[0] | px[1] | px[2] != 0);
+    let non_black = rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|px| px[0] | px[1] | px[2] != 0);
     assert!(non_black, "happy scene draws visible art");
 }
