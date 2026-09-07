@@ -2,7 +2,7 @@
 // Production mock-exclusion guard (T124; FR-028).
 //
 // Asserts the built production frontend bundle does NOT contain the dev-only browser IPC mock. Run
-// AFTER `pnpm build` (which emits apps/desktop/dist). The mock module exports a unique sentinel; if it
+// AFTER `bun run build` (which emits apps/desktop/dist). The mock module exports a unique sentinel; if it
 // survived tree-shaking into a shipped chunk, the build leaked dev-only behaviour.
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -12,7 +12,7 @@ const SENTINEL = 'kivori-ipc-browser-mock-must-not-ship';
 const DIST = 'apps/desktop/dist/assets';
 
 if (!existsSync(DIST)) {
-  console.error(`error: ${DIST} not found — run "pnpm build" (production) first.`);
+  console.error(`error: ${DIST} not found — run "bun run build" (production) first.`);
   process.exit(2);
 }
 
