@@ -6,6 +6,13 @@ procedure lives in [quickstart.md](../specs/001-device-connection-foundation/qui
 is where results are recorded. Targets come from the spec Success Criteria and the
 [hardware-validation numbers](../specs/001-device-connection-foundation/research.md).
 
+**Software-closure note (2026-09-07):** GitHub Actions host run #16 on PR #1 added and passed a real
+Windows startup smoke for the default-feature Tauri binary: `kivori-desktop.exe` remained alive for the
+10-second observation window with no `stack overflow` or `fatal runtime error` signature. That removes
+the previous *startup* blocker from automated acceptance, but it does not manufacture any of the manual
+checks below. Rows without a result remain outstanding until they are executed on a real Windows desktop
+and/or physical device.
+
 Fill `Result` with ✅ / ❌ and date; put measurements and observations in `Notes`.
 
 ## Background operation (T093 — no hardware; Windows/macOS window manager)
@@ -33,7 +40,7 @@ Fill `Result` with ✅ / ❌ and date; put measurements and observations in `Not
 | 9 | Display initialization + panel offsets correct (GC9A01 / ST7789) | R-3 | ✅ 2026-08-11 | Physical ST7789 240x240 initialized successfully on ESP32-C3. Kivori rendered correctly using physical geometry 240x240 with offset `(0,0)`. |
 | 10 | Each of `idle/happy/busy/sleeping` shows the matching animated scene | — | | `idle` confirmed on the physical ST7789. `happy`, `busy`, and `sleeping` still need physical verification. |
 | 11 | State change appears on the device | < 1 s (SC-004) | | Desktop → device `idle` state propagation was observed, but latency was not measured. |
-| 12 | On-device image matches the Device Studio preview for a fixed state + elapsed time | SC-005 | | Device Studio currently cannot be used for this check because the default desktop `device-studio` build still stack-overflows on Windows. |
+| 12 | On-device image matches the Device Studio preview for a fixed state + elapsed time | SC-005 | | The historical Windows startup blocker is no longer reproduced by the PR #1 Windows startup smoke (2026-09-07), but preview ↔ physical-panel parity itself has not been manually executed, so this row remains open. |
 | 13 | Sustainable SPI frame rate (full-frame vs tile updates) recorded | SC-004 / R-4 | | |
 | 14 | Only semantic state is sent (verified via safe diagnostics, not payload bytes) | FR-015 | | |
 
