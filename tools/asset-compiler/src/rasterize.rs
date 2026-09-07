@@ -51,8 +51,8 @@ mod tests {
         assert_eq!(pixels.len(), 4 * 4 * 2);
         // red = RGB(255,0,0) -> RGB565 0xF800 -> little-endian [0x00, 0xF8]
         let red = Rgb565::from_rgb888(255, 0, 0).raw().to_le_bytes();
-        for chunk in pixels.chunks_exact(2) {
-            assert_eq!(chunk, red);
+        for chunk in pixels.as_chunks::<2>().0 {
+            assert_eq!(chunk, &red);
         }
     }
 
