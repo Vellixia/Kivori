@@ -11,10 +11,10 @@ beforeEach(() => {
 });
 
 describe('Device Studio Controls', () => {
-  it('selecting a state updates the store', async () => {
+  it('selecting a state through the toggle group updates the store', async () => {
     const user = userEvent.setup();
     render(<Controls />);
-    await user.click(screen.getByRole('radio', { name: strings.studio.states.happy }));
+    await user.click(screen.getByRole('button', { name: strings.studio.states.happy }));
     expect(useStudioStore.getState().state).toBe('happy');
   });
 
@@ -31,10 +31,18 @@ describe('Device Studio Controls', () => {
     expect(screen.getByRole('button', { name: strings.studio.mirror })).toBeDisabled();
   });
 
-  it('marks the current state as the checked radio', () => {
+  it('marks the current state as the pressed toggle', () => {
     useStudioStore.setState({ state: 'busy' });
     render(<Controls />);
-    expect(screen.getByRole('radio', { name: strings.studio.states.busy })).toBeChecked();
+    expect(screen.getByRole('button', { name: strings.studio.states.busy })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('exposes the timeline as an accessible slider', () => {
+    render(<Controls />);
+    expect(screen.getByRole('slider', { name: strings.studio.scrub })).toBeInTheDocument();
   });
 
   it('has no axe accessibility violations', async () => {
