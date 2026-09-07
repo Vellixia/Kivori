@@ -55,3 +55,21 @@ jobs:
         run: node scripts/check-frontend-offline.mjs
       - name: Production mock-exclusion guard (T124, FR-028)
         run: node scripts/check-mock-excluded.mjs
+
+  windows-device-studio-startup:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - name: Build Device Studio frontend
+        run: pnpm --filter kivori-desktop-ui build
+      - name: Build Device Studio native binary
+        run: cargo build -p kivori-desktop
+      - name: Launch Device Studio and verify startup
+        shell: powershell
+        run: .\scripts\test-windows-device-studio-startup.ps1
