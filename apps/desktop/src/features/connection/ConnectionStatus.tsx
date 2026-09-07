@@ -1,12 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
-import {
-  CheckCircle2,
-  LoaderCircle,
-  TriangleAlert,
-  Unplug,
-  type LucideIcon,
-} from 'lucide-react';
+import { CheckCircle2, LoaderCircle, TriangleAlert, Unplug, type LucideIcon } from 'lucide-react';
 import { Badge } from '../../components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Separator } from '../../components/ui/separator';
@@ -16,12 +10,7 @@ import { strings } from '../../lib/i18n/strings';
 
 /// The six UI states the user sees (derived from the connection axis + retry count).
 type UiStatus =
-  | 'disconnected'
-  | 'connecting'
-  | 'connected'
-  | 'reconnecting'
-  | 'incompatible'
-  | 'error';
+  'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'incompatible' | 'error';
 
 const STATUS_ICONS: Record<UiStatus, LucideIcon> = {
   disconnected: Unplug,
@@ -77,7 +66,8 @@ export function ConnectionStatus(): ReactElement {
   const t = strings.connection;
   const ui = status ? uiStatus(status) : 'disconnected';
   const StatusIcon = STATUS_ICONS[ui];
-  const badgeVariant = ui === 'connected' ? 'default' : ui === 'incompatible' ? 'destructive' : 'secondary';
+  const badgeVariant =
+    ui === 'connected' ? 'default' : ui === 'incompatible' ? 'destructive' : 'secondary';
 
   return (
     <section aria-labelledby="conn-heading" className="connection-status">
@@ -93,7 +83,9 @@ export function ConnectionStatus(): ReactElement {
               {status && status.retryCount > 0 ? ` (${t.attempt} ${status.retryCount})` : ''}
             </Badge>
             {status?.incompatibleReason ? (
-              <p className="conn-reason mt-2 text-sm text-destructive">{status.incompatibleReason}</p>
+              <p className="conn-reason mt-2 text-sm text-destructive">
+                {status.incompatibleReason}
+              </p>
             ) : null}
           </div>
 
