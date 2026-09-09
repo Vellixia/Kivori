@@ -35,7 +35,7 @@ host-sim = []
 # drives the REAL dispatcher/lifecycle/renderer and asserts over serial (see sim/wokwi/README.md).
 # Simulation is an extra gate — it never replaces the host-sim tests or physical validation.
 
-physical-st7789 = ["embedded"]
+physical-st7789 = ["embedded", "dep:static_cell"]
 
 
 wokwi = ["embedded"]
@@ -65,6 +65,7 @@ kivori-framebuffer = { path = "../../crates/kivori-framebuffer" }
 kivori-renderer = { path = "../../crates/kivori-renderer" }
 kivori-assets = { path = "../../crates/kivori-assets" }
 heapless = "0.8"
+static_cell = { version = "2.1", optional = true }
 # `rt` provides the runtime entry point (`#[esp_hal::main]`) and `init()`; `unstable` is required by
 # the peripheral drivers the Phase 8 adapters will use.
 esp-hal = { version = "1.1.1", default-features = false, features = ["esp32c3", "rt", "unstable"], optional = true }

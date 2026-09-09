@@ -18,7 +18,7 @@ author: Kivori
 steps:
   - wait-serial: 'KIVORI-RUN READY iface=usb-serial-jtag display=generic-spi'
   - wait-serial: 'KIVORI-RUN PASS lifecycle-booting-to-offline'
-  - wait-serial: 'KIVORI-RUN PASS first-frame-six-tiles'
+  - wait-serial: 'KIVORI-RUN PASS first-frame-36-tiles'
   - wait-serial: 'KIVORI-RUN PASS health-report'
   - wait-serial: 'KIVORI-RUN PASS unchanged-frame-no-reflush'
   # hello: handshake open at the current protocol version

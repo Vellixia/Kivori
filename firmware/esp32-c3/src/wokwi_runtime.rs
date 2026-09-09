@@ -90,9 +90,9 @@ impl Observed {
             self.booted_offline = true;
             line(link, "PASS lifecycle-booting-to-offline");
         }
-        if !self.first_tiles && tick.tiles_flushed == 6 {
+        if !self.first_tiles && tick.tiles_flushed == crate::render::TILE_COUNT as u32 {
             self.first_tiles = true;
-            line(link, "PASS first-frame-six-tiles");
+            line(link, "PASS first-frame-36-tiles");
         }
         // A later tick that flushes nothing proves change-driven refresh over the real bus.
         if self.first_tiles && !self.quiet_frame && tick.tiles_flushed == 0 {

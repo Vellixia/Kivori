@@ -18,6 +18,16 @@ pub enum RasterError {
 /// # Errors
 /// [`RasterError::Parse`] if the SVG is invalid; [`RasterError::Alloc`] if the pixmap can't be made.
 pub fn svg_to_rgb565(svg: &[u8], width: u32, height: u32) -> Result<Vec<u8>, RasterError> {
+    let (pixels, _) = svg_to_rgb565_alpha(svg, width, height)?;
+    Ok(pixels)
+}
+
+/// Rasterizes an SVG and returns RGB565 bytes plus one 8-bit alpha value per pixel.
+pub fn svg_to_rgb565_alpha(
+    svg: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<(Vec<u8>, Vec<u8>), RasterError> {
     let opt = resvg::usvg::Options::default();
     let tree = resvg::usvg::Tree::from_data(svg, &opt).map_err(|_| RasterError::Parse)?;
 
@@ -32,12 +42,14 @@ pub fn svg_to_rgb565(svg: &[u8], width: u32, height: u32) -> Result<Vec<u8>, Ras
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
     let mut out = Vec::with_capacity((width as usize) * (height as usize) * 2);
+    let mut alpha = Vec::with_capacity((width as usize) * (height as usize));
     for px in pixmap.pixels() {
         let c = px.demultiply();
         let rgb = Rgb565::from_rgb888(c.red(), c.green(), c.blue());
         out.extend_from_slice(&rgb.raw().to_le_bytes());
+        alpha.push(px.alpha());
     }
-    Ok(out)
+    Ok((out, alpha))
 }
 
 #[cfg(test)]

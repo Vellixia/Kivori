@@ -12,6 +12,7 @@ use heapless::Vec as HVec;
 use kivori_asset_compiler::compile_default_blob;
 use kivori_assets::AssetBlob;
 use kivori_firmware::proto::DeviceIdentity;
+use kivori_firmware::render::{TILE_COLS, TILE_COUNT};
 use kivori_firmware::runtime::{Runtime, RuntimeConfig, Tick};
 use kivori_firmware::sim::{CaptureDisplay, SimPipe, VirtualClock};
 use kivori_model::{Capabilities, CompanionState, ProtocolVersion, SendableState};
@@ -61,7 +62,7 @@ fn host_drain(pipe: &mut SimPipe) -> Vec<Message> {
 
 /// The whole test rig: runtime plus its three ports and the compiled asset blob.
 struct Harness {
-    runtime: Runtime,
+    runtime: Runtime<'static>,
     clock: VirtualClock,
     pipe: SimPipe,
     display: Box<CaptureDisplay>,
@@ -102,20 +103,40 @@ fn boot_transitions_to_offline_and_paints_the_first_frame() {
     // The device owns `booting` at power-on and falls back to `offline` with no host (FR-014/015).
     assert_eq!(tick.state, Some(CompanionState::Offline));
     assert_eq!(h.runtime.state(), CompanionState::Offline);
-    // A full 240x240 frame is six 240x40 bands.
-    assert_eq!(tick.tiles_flushed, 6, "first frame flushes every tile");
-    assert_eq!(h.display.blits, 6);
+    assert_eq!(
+        tick.tiles_flushed as usize, TILE_COUNT,
+        "first frame flushes every tile"
+    );
+    assert_eq!(h.display.blits as usize, TILE_COUNT);
 }
 
 #[test]
-fn an_unchanged_frame_flushes_nothing() {
+fn a_tick_before_the_next_frame_flushes_nothing() {
     let mut h = Harness::new();
     h.step();
-    let quiet = h.tick_next_frame();
+    let quiet = h.step();
     assert_eq!(
         quiet.tiles_flushed, 0,
         "no tile changed, so nothing may reach the panel (FR-013)"
     );
+}
+
+#[test]
+fn a_late_frame_keeps_the_original_cadence_without_queuing_stale_frames() {
+    let mut h = Harness::new();
+    h.step();
+
+    h.clock.advance(50);
+    assert!(h.step().frame_rendered, "the overdue frame renders once");
+
+    h.clock.advance(15);
+    assert!(
+        !h.step().frame_rendered,
+        "the next anchored deadline is 66 ms"
+    );
+
+    h.clock.advance(1);
+    assert!(h.step().frame_rendered, "the 66 ms deadline is preserved");
 }
 
 #[test]
@@ -185,9 +206,9 @@ fn set_state_is_applied_reported_and_repainted() {
         let tick = h.tick_next_frame();
 
         assert_eq!(h.runtime.state(), expected);
-        assert_eq!(
-            tick.tiles_flushed, 6,
-            "a state change repaints the whole frame"
+        assert!(
+            tick.tiles_flushed as usize <= TILE_COUNT - TILE_COLS,
+            "the unchanged top background row is not retransmitted"
         );
         let report = host_drain(&mut h.pipe)
             .into_iter()
@@ -197,6 +218,14 @@ fn set_state_is_applied_reported_and_repainted() {
             })
             .expect("StateReport");
         assert_eq!(report.reported, expected);
+        let initial = h.display.frame().to_vec();
+        h.clock.advance(600);
+        h.step();
+        assert_ne!(
+            h.display.frame(),
+            initial.as_slice(),
+            "the transition advances after the immediate state report"
+        );
     }
 }
 
@@ -383,14 +412,17 @@ fn emission_order_is_stable() {
         Some(CompanionState::Offline),
         "tick 1: booting -> offline"
     );
-    assert_eq!(first.tiles_flushed, 6, "tick 1: the first full frame");
+    assert_eq!(
+        first.tiles_flushed as usize, TILE_COUNT,
+        "tick 1: the first full frame"
+    );
     assert!(
         first.health_sent,
         "tick 1: health goes out on the first tick, BEFORE any quiet frame can be observed"
     );
 
-    let second = h.tick_next_frame();
-    assert_eq!(second.tiles_flushed, 0, "tick 2: the first quiet frame");
+    let second = h.step();
+    assert_eq!(second.tiles_flushed, 0, "tick 2: no new frame is due yet");
     assert!(
         !second.health_sent,
         "tick 2: health must not repeat inside its interval"

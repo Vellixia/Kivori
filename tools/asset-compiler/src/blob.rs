@@ -1,22 +1,15 @@
-//! Deterministic assembly of the compiled asset blob (ADR-0004): rasterize each scene's SVG to a
-//! full-frame RGB565 sprite, build the `Manifest` + data pool, and emit `header || manifest || pool`.
-//!
-//! Placeholder scenes use one full-frame sprite each; richer per-layer composition (and smaller
-//! sprites) arrive with real artwork. The scene set is embedded via `include_bytes!` so the blob is
-//! reproducible from the compiler binary alone.
+//! Deterministic assembly of the compiled asset blob.
 
-use crate::rasterize::svg_to_rgb565;
+use crate::rasterize::svg_to_rgb565_alpha;
 use heapless::Vec as HVec;
 use kivori_assets::manifest::{BitmapEntry, LayerDef, Manifest, PoolRef, SceneDef};
 use kivori_assets::{FORMAT_VERSION, MAGIC, MAX_BITMAPS, MAX_SCENES, MAX_STRINGS};
 use kivori_model::{
-    CompanionState, DeviceProfile, FrameRate, Keyframe, LayerKind, Point, Rgb565, Size,
+    CompanionState, DeviceProfile, FrameRate, Keyframe, LayerKind, LayerRole, Point, Rgb565, Size,
 };
 
 const DIM: u16 = 240;
-
-/// A placeholder scene spec: `(state, embedded SVG bytes, background RGB)`.
-type SceneSpec = (CompanionState, &'static [u8], (u8, u8, u8));
+const PACKED_ALPHA_MAX: usize = 131_072;
 
 /// Assembles a compiled asset blob from rasterized sprites and scene definitions.
 pub struct BlobBuilder {
@@ -28,7 +21,6 @@ pub struct BlobBuilder {
 }
 
 impl BlobBuilder {
-    /// A new builder for the given device profile.
     #[must_use]
     pub fn new(profile: DeviceProfile) -> Self {
         Self {
@@ -40,25 +32,88 @@ impl BlobBuilder {
         }
     }
 
-    /// Adds a bitmap's RGB565 bytes to the pool and returns its `AssetId`.
+    /// Adds an opaque RGB565 bitmap, returning its deduplicated asset id.
     pub fn add_bitmap(&mut self, size: Size, frames: u16, pixels: &[u8]) -> u16 {
-        let offset = self.pool.len() as u32;
-        self.pool.extend_from_slice(pixels);
+        self.add_bitmap_inner(size, frames, pixels, None)
+    }
+
+    /// Adds RGB565 bytes with one 8-bit alpha sample per pixel. Alpha is packed two samples per byte.
+    pub fn add_masked_bitmap(
+        &mut self,
+        size: Size,
+        frames: u16,
+        pixels: &[u8],
+        alpha: &[u8],
+    ) -> u16 {
+        assert_eq!(
+            pixels.len(),
+            usize::from(size.w) * usize::from(size.h) * usize::from(frames) * 2
+        );
+        assert_eq!(alpha.len(), pixels.len() / 2);
+        let mut packed = Vec::with_capacity(alpha.len().div_ceil(2));
+        for (i, &a) in alpha.iter().enumerate() {
+            let nibble = a / 17;
+            if i % 2 == 0 {
+                packed.push(nibble);
+            } else {
+                *packed.last_mut().expect("alpha byte") |= nibble << 4;
+            }
+        }
+        self.add_bitmap_inner(size, frames, pixels, Some(&packed))
+    }
+
+    fn add_bitmap_inner(
+        &mut self,
+        size: Size,
+        frames: u16,
+        pixels: &[u8],
+        alpha: Option<&[u8]>,
+    ) -> u16 {
+        for (id, entry) in self.bitmaps.iter().enumerate() {
+            if entry.size != size
+                || entry.frames != frames
+                || entry.alpha.is_some() != alpha.is_some()
+            {
+                continue;
+            }
+            let matches_pixels = self.pool_slice(entry.data) == pixels;
+            let matches_alpha = match (entry.alpha, alpha) {
+                (None, None) => true,
+                (Some(r), Some(a)) => self.pool_slice(r) == a,
+                _ => false,
+            };
+            if matches_pixels && matches_alpha {
+                return id as u16;
+            }
+        }
+        let data = self.push_pool(pixels);
+        let alpha_ref = alpha.map(|a| self.push_pool(a));
         let id = self.bitmaps.len() as u16;
         self.bitmaps
             .push(BitmapEntry {
                 size,
                 frames,
-                data: PoolRef {
-                    offset,
-                    len: pixels.len() as u32,
-                },
+                data,
+                alpha: alpha_ref,
             })
             .expect("bitmap table capacity");
         id
     }
 
-    /// Adds a static scene consisting of a single full-frame sprite layer.
+    fn pool_slice(&self, r: PoolRef) -> &[u8] {
+        &self.pool[r.offset as usize..r.offset as usize + r.len as usize]
+    }
+
+    fn push_pool(&mut self, bytes: &[u8]) -> PoolRef {
+        let offset = self.pool.len() as u32;
+        self.pool.extend_from_slice(bytes);
+        PoolRef {
+            offset,
+            len: bytes.len() as u32,
+        }
+    }
+
+    /// Adds a static scene consisting of a single full-frame opaque sprite layer.
     pub fn add_full_sprite_scene(&mut self, id: CompanionState, background: Rgb565, asset: u16) {
         let mut keyframes = HVec::new();
         keyframes
@@ -72,6 +127,7 @@ impl BlobBuilder {
         let mut layers = HVec::new();
         layers
             .push(LayerDef {
+                role: LayerRole::Static,
                 kind: LayerKind::Sprite {
                     asset,
                     frame_size: Size::new(DIM, DIM),
@@ -91,8 +147,69 @@ impl BlobBuilder {
             .expect("scene capacity");
     }
 
-    /// Finalizes the blob bytes: `header (16) || postcard(manifest) || pool`.
+    fn add_mascot_scene(&mut self, state: CompanionState, body: u16, eyes: u16, mouth: u16) {
+        let specs = [
+            (
+                LayerRole::Body,
+                body,
+                Size::new(184, 160),
+                Point::new(28, 48),
+            ),
+            (
+                LayerRole::Eyes,
+                eyes,
+                Size::new(32, 40),
+                Point::new(66, 110),
+            ),
+            (
+                LayerRole::Eyes,
+                eyes,
+                Size::new(32, 40),
+                Point::new(142, 110),
+            ),
+            (
+                LayerRole::Mouth,
+                mouth,
+                Size::new(48, 24),
+                Point::new(96, 146),
+            ),
+        ];
+        let mut layers = HVec::new();
+        for (role, asset, size, origin) in specs {
+            let mut keyframes = HVec::new();
+            keyframes
+                .push(Keyframe {
+                    at_ms: 0,
+                    offset: Point::ORIGIN,
+                    sprite_frame: 0,
+                    visible: true,
+                })
+                .expect("keyframe capacity");
+            layers
+                .push(LayerDef {
+                    role,
+                    kind: LayerKind::Sprite {
+                        asset,
+                        frame_size: size,
+                    },
+                    origin,
+                    keyframes,
+                })
+                .expect("layer capacity");
+        }
+        self.scenes
+            .push(SceneDef {
+                id: state,
+                background: Rgb565::from_rgb888(10, 14, 24),
+                fps: FrameRate::fps(30),
+                frame_count: 120,
+                layers,
+            })
+            .expect("scene capacity");
+    }
+
     #[must_use]
+    /// Finalizes the binary asset blob (`header || manifest || pool`).
     pub fn finish(self) -> Vec<u8> {
         let manifest = Manifest {
             profile: self.profile,
@@ -104,7 +221,7 @@ impl BlobBuilder {
         let mut blob = Vec::with_capacity(16 + mbytes.len() + self.pool.len());
         blob.extend_from_slice(&MAGIC.to_le_bytes());
         blob.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
-        blob.extend_from_slice(&0u16.to_le_bytes()); // reserved
+        blob.extend_from_slice(&0u16.to_le_bytes());
         blob.extend_from_slice(&(mbytes.len() as u32).to_le_bytes());
         blob.extend_from_slice(&(self.pool.len() as u32).to_le_bytes());
         blob.extend_from_slice(&mbytes);
@@ -113,51 +230,72 @@ impl BlobBuilder {
     }
 }
 
-/// The placeholder scene set.
-const SCENES: [SceneSpec; 6] = [
-    (
-        CompanionState::Booting,
-        include_bytes!("../../../assets/scenes/booting.svg"),
-        (10, 10, 18),
-    ),
-    (
-        CompanionState::Idle,
-        include_bytes!("../../../assets/scenes/idle.svg"),
-        (12, 16, 28),
-    ),
-    (
-        CompanionState::Happy,
-        include_bytes!("../../../assets/scenes/happy.svg"),
-        (28, 24, 8),
-    ),
-    (
-        CompanionState::Busy,
-        include_bytes!("../../../assets/scenes/busy.svg"),
-        (28, 16, 8),
-    ),
-    (
-        CompanionState::Sleeping,
-        include_bytes!("../../../assets/scenes/sleeping.svg"),
-        (16, 12, 28),
-    ),
-    (
-        CompanionState::Offline,
-        include_bytes!("../../../assets/scenes/offline.svg"),
-        (10, 10, 10),
-    ),
-];
+fn layer_svg(source: &str, id: &str) -> Vec<u8> {
+    let (_, rest) = source.split_once("<defs>").expect("mascot SVG has defs");
+    let (defs, _) = rest.split_once("</defs>").expect("mascot SVG closes defs");
+    format!(r##"<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240"><defs>{defs}</defs><use href="#{id}"/></svg>"##).into_bytes()
+}
 
-/// Compiles the built-in placeholder scenes into a deterministic asset blob.
-///
-/// # Panics
-/// If a placeholder SVG fails to rasterize (a build-time bug, not runtime input).
+fn compile_layer(source: &str, id: &str, crop: (u32, u32, u32, u32)) -> (Vec<u8>, Vec<u8>) {
+    let svg = layer_svg(source, id);
+    let (pixels, alpha) = svg_to_rgb565_alpha(&svg, DIM as u32, DIM as u32).expect("mascot SVG");
+    let (x, y, w, h) = crop;
+    let mut cropped = Vec::with_capacity((w * h * 2) as usize);
+    let mut cropped_alpha = Vec::with_capacity((w * h) as usize);
+    for row in y..y + h {
+        let start = ((row * DIM as u32 + x) * 2) as usize;
+        cropped.extend_from_slice(&pixels[start..start + (w * 2) as usize]);
+        let astart = (row * DIM as u32 + x) as usize;
+        cropped_alpha.extend_from_slice(&alpha[astart..astart + w as usize]);
+    }
+    (cropped, cropped_alpha)
+}
+
 #[must_use]
 pub fn compile_default_blob() -> Vec<u8> {
+    let source = include_str!("../../../assets/mascot.svg");
     let mut builder = BlobBuilder::new(DeviceProfile::KIVORI_240);
-    for (state, svg, (r, g, b)) in SCENES {
-        let pixels = svg_to_rgb565(svg, u32::from(DIM), u32::from(DIM)).expect("placeholder SVG");
-        let asset = builder.add_bitmap(Size::new(DIM, DIM), 1, &pixels);
-        builder.add_full_sprite_scene(state, Rgb565::from_rgb888(r, g, b), asset);
+    let (body_pixels, body_alpha) = compile_layer(source, "body", (28, 48, 184, 160));
+    let body = builder.add_masked_bitmap(Size::new(184, 160), 1, &body_pixels, &body_alpha);
+    let states = [
+        (CompanionState::Booting, "booting"),
+        (CompanionState::Idle, "idle"),
+        (CompanionState::Happy, "happy"),
+        (CompanionState::Busy, "busy"),
+        (CompanionState::Sleeping, "sleeping"),
+        (CompanionState::Offline, "offline"),
+    ];
+    for (state, name) in states {
+        let (ep, ea) = compile_layer(source, &format!("eyes-{name}"), (66, 110, 32, 40));
+        let (mp, ma) = compile_layer(source, &format!("mouth-{name}"), (96, 146, 48, 24));
+        let eyes = builder.add_masked_bitmap(Size::new(32, 40), 1, &ep, &ea);
+        let mouth = builder.add_masked_bitmap(Size::new(48, 24), 1, &mp, &ma);
+        builder.add_mascot_scene(state, body, eyes, mouth);
     }
-    builder.finish()
+    let blob = builder.finish();
+    assert!(
+        blob.len() <= PACKED_ALPHA_MAX,
+        "compiled mascot pack exceeds 128 KiB: {}",
+        blob.len()
+    );
+    blob
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn body_crop_contains_all_nontransparent_pixels() {
+        let source = include_str!("../../../assets/mascot.svg");
+        let svg = layer_svg(source, "body");
+        let (_, alpha) = svg_to_rgb565_alpha(&svg, DIM as u32, DIM as u32).unwrap();
+        for y in 0..DIM as usize {
+            for x in 0..DIM as usize {
+                if !(28..212).contains(&x) || !(48..208).contains(&y) {
+                    assert_eq!(alpha[y * DIM as usize + x], 0, "body overflow at ({x},{y})");
+                }
+            }
+        }
+    }
 }

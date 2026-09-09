@@ -20,8 +20,8 @@ use kivori_asset_compiler::compile_default_blob;
 use kivori_assets::AssetBlob;
 use kivori_firmware::display::{init_panel, DisplayError, MipidsiSink, PanelGeometry};
 use kivori_firmware::ports::DisplaySink;
-use kivori_firmware::render::{TileRenderer, TILE_H, TILE_PIXELS, TILE_W};
-use kivori_model::{CompanionState, Rect, Rgb565};
+use kivori_firmware::render::{TileRenderer, TILE_COUNT, TILE_H, TILE_PIXELS, TILE_W};
+use kivori_model::{CompanionState, MascotAnimator, Rect, Rgb565};
 use mipidsi::models::ILI9341Rgb565;
 use std::cell::RefCell;
 use std::convert::Infallible;
@@ -252,11 +252,7 @@ fn a_tile_blit_is_one_window_pair_plus_exact_pixel_bytes() {
         "a windowed tile write is exactly CASET, RASET, RAMWR"
     );
     // Inclusive end coordinates, big-endian u16 pairs.
-    assert_eq!(
-        cmds[0].args,
-        vec![0x00, 0x00, 0x00, 0xEF],
-        "columns 0..=239"
-    );
+    assert_eq!(cmds[0].args, vec![0x00, 0x00, 0x00, 0x27], "columns 0..=39");
     assert_eq!(cmds[1].args, vec![0x00, 0x28, 0x00, 0x4F], "rows 40..=79");
     assert_eq!(
         payload_len(&cmds, WRITE_MEMORY_START),
@@ -365,7 +361,7 @@ fn a_failed_spi_write_is_surfaced_not_swallowed() {
 // ── Scope B: RGB565 tile-stream properties through the canonical renderer ────────────────────────────
 
 #[test]
-fn a_full_frame_is_six_tiles_of_9600_pixels() {
+fn a_full_frame_uses_small_update_windows_without_changing_its_payload() {
     let bytes = compile_default_blob();
     let blob = AssetBlob::parse(&bytes).expect("valid blob");
     let (mut sink, log) = harness(full_panel());
@@ -380,27 +376,56 @@ fn a_full_frame_is_six_tiles_of_9600_pixels() {
     let cmds = commands(&events);
     assert_eq!(
         cmds.iter().filter(|c| c.code == WRITE_MEMORY_START).count(),
-        6,
-        "six 240x40 bands cover the 240x240 panel"
+        TILE_COUNT,
+        "small windows cover the 240x240 panel"
     );
     assert_eq!(
         cmds.iter().filter(|c| c.code == SET_COLUMN_ADDRESS).count(),
-        6,
+        TILE_COUNT,
         "every tile sets its own window"
     );
-    assert_eq!(TILE_PIXELS, 9600);
+    assert_eq!(TILE_PIXELS, 1600);
     assert_eq!(
         payload_len(&cmds, WRITE_MEMORY_START),
-        6 * TILE_PIXELS * 2,
+        240 * 240 * 2,
         "115200 bytes for a full RGB565 frame"
     );
-    // Row-major tile Y offsets, in order.
-    let rows: Vec<u8> = cmds
-        .iter()
-        .filter(|c| c.code == SET_PAGE_ADDRESS)
-        .map(|c| c.args[1])
-        .collect();
-    assert_eq!(rows, vec![0, 40, 80, 120, 160, 200]);
+}
+
+#[test]
+fn an_idle_blink_transfers_less_than_one_third_of_a_frame() {
+    let bytes = compile_default_blob();
+    let blob = AssetBlob::parse(&bytes).expect("valid blob");
+    let (mut sink, log) = harness(full_panel());
+    let mut storage: Box<[Rgb565; kivori_firmware::render::FRAME_PIXELS]> =
+        vec![Rgb565::from_raw(0); kivori_firmware::render::FRAME_PIXELS]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
+    let mut renderer = TileRenderer::with_frame_buffer(&mut storage);
+    let animator = MascotAnimator::new(CompanionState::Idle, 0);
+
+    renderer
+        .render_animation(&blob, CompanionState::Idle, &animator.pose_at(0), &mut sink)
+        .expect("initial frame");
+    log.borrow_mut().clear();
+
+    renderer
+        .render_animation(
+            &blob,
+            CompanionState::Idle,
+            &animator.pose_at(3_600),
+            &mut sink,
+        )
+        .expect("blink frame");
+
+    let commands = commands(&log.borrow());
+    let bytes = payload_len(&commands, WRITE_MEMORY_START);
+    assert!(bytes > 0, "the blink must reach the panel");
+    assert!(
+        bytes < (240 * 240 * 2) / 3,
+        "a local facial change sent {bytes} bytes"
+    );
 }
 
 #[test]

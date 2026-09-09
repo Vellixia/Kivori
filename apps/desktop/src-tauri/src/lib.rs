@@ -6,6 +6,7 @@
 
 pub mod device;
 pub mod diagnostics;
+pub mod firmware;
 pub mod ipc;
 pub mod orchestrator;
 pub mod render;
@@ -30,17 +31,21 @@ pub fn run() {
             let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let status = std::sync::Arc::new(std::sync::Mutex::new(ipc::dto::initial_status()));
             let diagnostics = std::sync::Arc::new(diagnostics::DiagnosticsLog::new(256));
+            let firmware_status =
+                std::sync::Arc::new(std::sync::Mutex::new(firmware::initial_status()));
             let device_thread = runtime::device_task::spawn(
                 app.handle().clone(),
                 std::sync::Arc::clone(&status),
                 std::sync::Arc::clone(&diagnostics),
+                std::sync::Arc::clone(&firmware_status),
                 commands_rx,
                 std::sync::Arc::clone(&cancel),
             );
-            app.manage(runtime::state::AppState::new(
+            app.manage(runtime::state::AppState::new_with_firmware(
                 cfg!(feature = "device-studio"),
                 status,
                 diagnostics,
+                firmware_status,
                 commands_tx,
                 cancel,
                 device_thread,
@@ -56,11 +61,14 @@ pub fn run() {
         ipc::commands::list_states,
         ipc::commands::set_desired_state,
         ipc::commands::get_diagnostics,
+        ipc::commands::get_firmware_status,
+        ipc::commands::flash_firmware,
         ipc::commands::render_preview_frame,
         ipc::commands::mirror_state,
         ipc::channels::open_preview_stream,
         ipc::channels::close_preview_stream,
         ipc::channels::ack_preview_frame,
+        ipc::channels::update_preview_stream,
     ]);
     #[cfg(not(feature = "device-studio"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -69,6 +77,8 @@ pub fn run() {
         ipc::commands::list_states,
         ipc::commands::set_desired_state,
         ipc::commands::get_diagnostics,
+        ipc::commands::get_firmware_status,
+        ipc::commands::flash_firmware,
     ]);
 
     builder

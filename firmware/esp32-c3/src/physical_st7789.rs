@@ -14,6 +14,8 @@ use embedded_hal_bus::spi::ExclusiveDevice;
 
 use esp_hal::{
     delay::Delay,
+    dma::{DmaRxBuf, DmaTxBuf},
+    dma_buffers_chunk_size,
     gpio::{Level, Output, OutputConfig},
     peripherals::Peripherals,
     spi::master::{Config, Spi},
@@ -21,7 +23,7 @@ use esp_hal::{
 };
 
 use kivori_assets::AssetBlob;
-use kivori_model::Capabilities;
+use kivori_model::{Capabilities, Rgb565};
 use kivori_protocol::FirmwareVersion;
 
 use mipidsi::{interface::SpiInterface, Builder};
@@ -30,12 +32,25 @@ use crate::{
     display::MipidsiSink,
     profile::physical_st7789 as hw,
     proto::DeviceIdentity,
-    runtime::{run, RuntimeConfig},
+    render::FRAME_PIXELS,
+    runtime::{run_buffered, RuntimeConfig},
     transport::{TxBuffered, UsbJtagTransport},
 };
 
-/// Number of bytes used by `mipidsi` for batching SPI display writes.
-const SPI_BATCH_BYTES: usize = 512;
+/// Bytes held by each DMA transfer. This fits a complete 40x40 RGB565 tile
+/// (3,200 bytes) and is also the maximum mipidsi SPI batch size.
+const SPI_DMA_BUFFER_BYTES: usize = 4_096;
+/// ESP32-C3 DMA descriptors can carry at most 4,095 bytes, so the 4 KiB
+/// transfer capacity needs two TX descriptors.
+const SPI_DMA_DESCRIPTOR_BYTES: usize = 4_095;
+/// `SpiDmaBus` owns an RX buffer even for write-only traffic. One byte and one
+/// descriptor satisfy the HAL constructor; write operations use its separate
+/// empty RX transfer and never populate this buffer.
+const SPI_DMA_RX_BUFFER_BYTES: usize = 1;
+
+/// Physical-mode staging memory lives in `.bss`, never on the ESP32-C3 stack.
+static FRAME_BUFFER: static_cell::ConstStaticCell<[Rgb565; FRAME_PIXELS]> =
+    static_cell::ConstStaticCell::new([Rgb565::from_raw(0); FRAME_PIXELS]);
 
 /// Keep the typed `esp-hal` GPIO field selections below synchronized with the
 /// numeric hardware profile.
@@ -90,6 +105,22 @@ pub fn run_mode(
     .with_sck(peripherals.GPIO6)
     .with_mosi(peripherals.GPIO7);
 
+    // The panel is write-only, so SPI DMA needs only a transmit buffer. The
+    // 4 KiB transfer buffer replaces the previous 512-byte CPU-driven bursts;
+    // it is large enough for a whole change-driven tile in one transaction.
+    // `SpiDmaBus` retains the standard `embedded-hal` SPI bus interface that
+    // mipidsi and ExclusiveDevice expect.
+    let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) = dma_buffers_chunk_size!(
+        SPI_DMA_RX_BUFFER_BYTES,
+        SPI_DMA_BUFFER_BYTES,
+        SPI_DMA_DESCRIPTOR_BYTES
+    );
+    let dma_rx_buffer = DmaRxBuf::new(rx_descriptors, rx_buffer).expect("SPI DMA RX buffer");
+    let dma_tx_buffer = DmaTxBuf::new(tx_descriptors, tx_buffer).expect("SPI DMA TX buffer");
+    let spi = spi
+        .with_dma(peripherals.DMA_CH0)
+        .with_buffers(dma_rx_buffer, dma_tx_buffer);
+
     // -------------------------------------------------------------------------
     // Display control pins
     //
@@ -120,7 +151,7 @@ pub fn run_mode(
 
     let spi_dev = ExclusiveDevice::new(spi, NoChipSelect, Delay::new()).expect("SPI device");
 
-    let mut interface_buffer = [0u8; SPI_BATCH_BYTES];
+    let mut interface_buffer = [0u8; SPI_DMA_BUFFER_BYTES];
 
     let interface = SpiInterface::new(spi_dev, dc, &mut interface_buffer);
 
@@ -147,7 +178,7 @@ pub fn run_mode(
     // Kivori display sink
     //
     // Converts the initialized mipidsi display into Kivori's generic
-    // DisplaySink. The renderer will send change-driven 240x40 RGB565 tiles.
+    // DisplaySink. The renderer will send change-driven 40x40 RGB565 tiles.
     // -------------------------------------------------------------------------
 
     let mut display = MipidsiSink::new(display, hw::geometry());
@@ -197,13 +228,20 @@ pub fn run_mode(
     // Never returns.
     // -------------------------------------------------------------------------
 
-    run(
+    // Keeping a complete RGB565 frame in static storage lets the renderer
+    // compose all changed pixels before it sends the first window to ST7789.
+    // This avoids exposing a mixture of old and new mascot rows while a pose
+    // is being composed. The frame costs 115,200 bytes of ESP32-C3 SRAM.
+    let frame_buffer = FRAME_BUFFER.take();
+
+    run_buffered(
         identity,
         RuntimeConfig::default(),
         &clock,
         &mut transport,
         &mut display,
         &blob,
+        frame_buffer,
         |_tick, _transport| {},
     );
 }

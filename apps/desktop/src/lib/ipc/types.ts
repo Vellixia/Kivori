@@ -24,6 +24,13 @@ export interface DeviceInfoDto {
   deviceIdHashShort: string;
 }
 
+export interface FirmwareStatusDto {
+  available: boolean;
+  phase: 'idle' | 'preparing' | 'flashing' | 'reconnecting' | 'succeeded' | 'failed';
+  message: string;
+  imageSize: number;
+}
+
 export interface ConnectionStatusDto {
   connection: ConnectionState;
   desired: SendableState;
@@ -66,3 +73,14 @@ export const PREVIEW_DIM = 240;
 
 /** Canonical preview stream rate (frames per second); the native side caps to this. */
 export const PREVIEW_FPS = 30;
+/** Semantic changes replayed by the shared Rust animator; no animation math in React. */
+export interface AnimationEvent {
+  atMs: number;
+  state: CompanionState;
+}
+
+export interface AnimationTimeline {
+  initialState: CompanionState;
+  events: AnimationEvent[];
+}
+export const MAX_ANIMATION_EVENTS = 256;

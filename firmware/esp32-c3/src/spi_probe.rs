@@ -7,9 +7,9 @@
 //! * **Scope A — generic SPI transactions**: the peripheral initialises, the reset line is sequenced, CS
 //!   frames every transaction, D/C separates command from data phases, and transfer boundaries are
 //!   counted.
-//! * **Scope B — generic RGB565 tile stream**: six 240x40 tiles per frame, 9,600 pixels each, an exact
-//!   deterministic byte volume, correct tile Y offsets, no retransmission for an unchanged frame, and
-//!   retransmission when the state changes.
+//! * **Scope B — generic RGB565 tile stream**: thirty-six 40x40 tiles per frame, 1,600 pixels each, an
+//!   exact deterministic byte volume, correct tile positions, no retransmission for an unchanged frame,
+//!   and retransmission when the state changes.
 //!
 //! # What this is NOT
 //!
@@ -28,7 +28,7 @@
 use crate::display::init_panel;
 use crate::ports::DisplaySink;
 use crate::profile::wokwi::{geometry, WokwiSpiPins};
-use crate::render::{TileRenderer, TILE_H, TILE_PIXELS, TILE_W};
+use crate::render::{TileRenderer, TILE_COLS, TILE_COUNT, TILE_H, TILE_PIXELS, TILE_W};
 use core::cell::Cell;
 use embedded_hal::digital::{ErrorType as DigitalErrorType, OutputPin};
 use embedded_hal::spi::{ErrorType as SpiErrorType, Operation, SpiDevice};
@@ -58,9 +58,9 @@ const SPI_BATCH_BYTES: usize = 512;
 /// each, plus two bytes per RGB565 pixel.
 const TILE_DATA_BYTES: u32 = 4 + 4 + (TILE_PIXELS as u32) * 2;
 /// Data-phase bytes for one full 240x240 frame.
-const FRAME_DATA_BYTES: u32 = TILE_DATA_BYTES * 6;
+const FRAME_DATA_BYTES: u32 = TILE_DATA_BYTES * TILE_COUNT as u32;
 /// Command-phase bytes for one full frame: CASET + RASET + RAMWR per tile.
-const FRAME_COMMAND_BYTES: u32 = 3 * 6;
+const FRAME_COMMAND_BYTES: u32 = 3 * TILE_COUNT as u32;
 
 /// Bus-activity counters shared by the instrumented SPI device and pins.
 ///
@@ -207,7 +207,6 @@ struct CountingSink<S> {
     inner: S,
     blits: u32,
     pixels: u32,
-    tile_ys: [u16; 8],
     geometry_ok: bool,
 }
 
@@ -217,7 +216,6 @@ impl<S: DisplaySink> CountingSink<S> {
             inner,
             blits: 0,
             pixels: 0,
-            tile_ys: [0; 8],
             geometry_ok: true,
         }
     }
@@ -225,7 +223,6 @@ impl<S: DisplaySink> CountingSink<S> {
     fn reset(&mut self) {
         self.blits = 0;
         self.pixels = 0;
-        self.tile_ys = [0; 8];
         self.geometry_ok = true;
     }
 }
@@ -234,10 +231,15 @@ impl<S: DisplaySink> DisplaySink for CountingSink<S> {
     type Error = S::Error;
 
     fn blit_tile(&mut self, rect: Rect, pixels: &[Rgb565]) -> Result<(), Self::Error> {
-        if let Some(slot) = self.tile_ys.get_mut(self.blits as usize) {
-            *slot = rect.y;
-        }
-        if rect.w != TILE_W || rect.h != TILE_H || pixels.len() != TILE_PIXELS {
+        let tile = self.blits as usize;
+        let expected_x = (tile % TILE_COLS) as u16 * TILE_W;
+        let expected_y = (tile / TILE_COLS) as u16 * TILE_H;
+        if rect.x != expected_x
+            || rect.y != expected_y
+            || rect.w != TILE_W
+            || rect.h != TILE_H
+            || pixels.len() != TILE_PIXELS
+        {
             self.geometry_ok = false;
         }
         self.blits += 1;
@@ -264,9 +266,9 @@ fn fill_solid(buf: &mut [Rgb565; TILE_PIXELS], color: u16) {
 }
 
 /// Fills `buf` with an 8x8 checkerboard, deterministically derived from the tile's y origin.
-fn fill_checkerboard(buf: &mut [Rgb565; TILE_PIXELS], tile_y: u16) {
+fn fill_checkerboard(buf: &mut [Rgb565; TILE_PIXELS], tile_x: u16, tile_y: u16) {
     for (i, px) in buf.iter_mut().enumerate() {
-        let x = (i % TILE_W as usize) as u16;
+        let x = tile_x + (i % TILE_W as usize) as u16;
         let y = tile_y + (i / TILE_W as usize) as u16;
         let on = ((x / 8) + (y / 8)).is_multiple_of(2);
         *px = Rgb565::from_raw(if on { 0xFFFF } else { 0x0000 });
@@ -277,20 +279,23 @@ fn fill_checkerboard(buf: &mut [Rgb565; TILE_PIXELS], tile_y: u16) {
 fn blit_frame<S: DisplaySink>(
     sink: &mut CountingSink<S>,
     buf: &mut [Rgb565; TILE_PIXELS],
-    mut fill: impl FnMut(&mut [Rgb565; TILE_PIXELS], u16),
+    mut fill: impl FnMut(&mut [Rgb565; TILE_PIXELS], u16, u16),
 ) -> bool {
     sink.reset();
-    for tile in 0..6u16 {
-        let y = tile * TILE_H;
-        fill(buf, y);
+    for tile in 0..TILE_COUNT {
+        let x = (tile % TILE_COLS) as u16 * TILE_W;
+        let y = (tile / TILE_COLS) as u16 * TILE_H;
+        fill(buf, x, y);
         if sink
-            .blit_tile(Rect::new(0, y, TILE_W, TILE_H), buf.as_slice())
+            .blit_tile(Rect::new(x, y, TILE_W, TILE_H), buf.as_slice())
             .is_err()
         {
             return false;
         }
     }
-    sink.blits == 6 && sink.pixels == 6 * TILE_PIXELS as u32 && sink.geometry_ok
+    sink.blits == TILE_COUNT as u32
+        && sink.pixels == TILE_COUNT as u32 * TILE_PIXELS as u32
+        && sink.geometry_ok
 }
 
 /// Runs the probe. Returns `true` only if every stage passed.
@@ -394,7 +399,7 @@ pub fn run(peripherals: Peripherals) -> bool {
         (0x001F, "rgb-blue"),
     ] {
         let before = counters.data_bytes();
-        let ok = blit_frame(&mut sink, &mut tile, |buf, _y| fill_solid(buf, color));
+        let ok = blit_frame(&mut sink, &mut tile, |buf, _x, _y| fill_solid(buf, color));
         let bytes = counters.data_bytes() - before;
         check(&mut pass, ok && bytes == FRAME_DATA_BYTES, stage);
     }
@@ -424,11 +429,10 @@ pub fn run(peripherals: Peripherals) -> bool {
 
             // Six full-width bands, in top-to-bottom order, 9,600 pixels each.
             let geometry_ok = rendered
-                && sink.blits == 6
+                && sink.blits == TILE_COUNT as u32
                 && sink.geometry_ok
-                && sink.pixels == 6 * TILE_PIXELS as u32
-                && sink.tile_ys[..6] == [0, 40, 80, 120, 160, 200];
-            check(&mut pass, geometry_ok, "tile-count-6");
+                && sink.pixels == TILE_COUNT as u32 * TILE_PIXELS as u32;
+            check(&mut pass, geometry_ok, "tile-count-36");
             println!(
                 "{TAG} INFO frame data-bytes={frame_data} cmd-bytes={frame_cmd} pixels={}",
                 sink.pixels
@@ -452,7 +456,7 @@ pub fn run(peripherals: Peripherals) -> bool {
                 "unchanged-no-reflush",
             );
 
-            // A changed state must retransmit every tile of the new frame.
+            // A changed state transmits only bands whose pixels changed; common background stays cached.
             sink.reset();
             let changed_before = counters.data_bytes();
             let changed = renderer
@@ -461,13 +465,14 @@ pub fn run(peripherals: Peripherals) -> bool {
             check(
                 &mut pass,
                 changed
-                    && sink.blits == 6
-                    && counters.data_bytes() - changed_before == FRAME_DATA_BYTES,
+                    && sink.blits > 0
+                    && sink.blits <= 6
+                    && counters.data_bytes() - changed_before == sink.blits * TILE_DATA_BYTES,
                 "changed-reflush",
             );
         }
         Err(_) => {
-            check(&mut pass, false, "tile-count-6");
+            check(&mut pass, false, "tile-count-36");
             check(&mut pass, false, "tile-bytes");
             check(&mut pass, false, "unchanged-no-reflush");
             check(&mut pass, false, "changed-reflush");

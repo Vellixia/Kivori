@@ -8,7 +8,7 @@
 # SCOPE — this asserts generic bus and tile-stream properties only:
 #   * the SPI peripheral initialises and the panel reset line is sequenced
 #   * command and data phases are distinguishable (D/C), transactions are CS-framed
-#   * six 240x40 RGB565 tiles per frame, 9,600 pixels each, in top-to-bottom order
+#   * thirty-six 40x40 RGB565 tiles per frame, 1,600 pixels each, in row-major order
 #   * an exact deterministic byte volume per frame
 #   * an unchanged frame retransmits nothing; a changed state retransmits
 #
@@ -35,7 +35,7 @@ steps:
   # 4. A non-uniform pattern, so a stuck-at-one-colour bus cannot pass the colour stages.
   - wait-serial: 'KIVORI-SPI PASS checkerboard'
   # 5. The canonical shared renderer over the same bus: tile geometry, then byte volume.
-  - wait-serial: 'KIVORI-SPI PASS tile-count-6'
+  - wait-serial: 'KIVORI-SPI PASS tile-count-36'
   - wait-serial: 'KIVORI-SPI PASS tile-bytes'
   # 6. Change-driven refresh (FR-013) in both directions.
   - wait-serial: 'KIVORI-SPI PASS unchanged-no-reflush'

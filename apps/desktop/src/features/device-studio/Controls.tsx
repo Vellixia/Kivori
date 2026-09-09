@@ -5,7 +5,7 @@ import { Slider } from '../../components/ui/slider';
 import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
 import { mirrorState } from '../../lib/ipc';
 import type { CompanionState, SendableState } from '../../lib/ipc/types';
-import { COMPANION_STATES, SENDABLE_STATES } from '../../lib/ipc/types';
+import { COMPANION_STATES, SENDABLE_STATES, MAX_ANIMATION_EVENTS } from '../../lib/ipc/types';
 import { strings } from '../../lib/i18n/strings';
 import { SCENE_DURATION_MS, STEP_MS, useStudioStore } from './store';
 
@@ -20,6 +20,10 @@ export function Controls(): ReactElement {
   const seek = useStudioStore((s) => s.seek);
   const step = useStudioStore((s) => s.step);
   const toggle = useStudioStore((s) => s.toggle);
+  const reset = useStudioStore((s) => s.reset);
+  const eventLimit = useStudioStore(
+    (s) => s.events.filter((e) => e.atMs <= s.elapsedMs).length >= MAX_ANIMATION_EVENTS,
+  );
 
   const t = strings.studio;
   const canMirror = SENDABLE.has(state);
@@ -36,6 +40,7 @@ export function Controls(): ReactElement {
             if (nextState) setState(nextState);
           }}
           variant="outline"
+          disabled={eventLimit}
           className="flex-wrap"
         >
           {COMPANION_STATES.map((candidate) => (
@@ -45,16 +50,20 @@ export function Controls(): ReactElement {
           ))}
         </ToggleGroup>
       </fieldset>
+      {eventLimit && <p>Restart the preview to record more state changes.</p>}
 
       <div className="scrub space-y-2">
         <div className="flex items-center justify-between gap-3 text-sm">
           <span>{t.scrub}</span>
-          <output className="font-mono text-muted-foreground">{elapsedMs}</output>
+          <output className="font-mono text-muted-foreground">{Math.round(elapsedMs)}</output>
         </div>
         <Slider
           aria-label={t.scrub}
           min={0}
-          max={SCENE_DURATION_MS}
+          max={Math.max(
+            SCENE_DURATION_MS,
+            Math.ceil(elapsedMs / SCENE_DURATION_MS) * SCENE_DURATION_MS,
+          )}
           step={STEP_MS}
           value={elapsedMs}
           onValueChange={(value) => seek(Array.isArray(value) ? (value[0] ?? 0) : value)}
@@ -69,6 +78,9 @@ export function Controls(): ReactElement {
         <Button type="button" variant="outline" onClick={() => step()}>
           <StepForward data-icon="inline-start" />
           {t.step}
+        </Button>
+        <Button type="button" variant="outline" onClick={reset}>
+          Restart preview
         </Button>
         <Button
           type="button"

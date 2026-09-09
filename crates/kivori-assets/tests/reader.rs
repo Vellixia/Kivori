@@ -4,10 +4,11 @@ use heapless::Vec;
 use kivori_assets::manifest::{BitmapEntry, LayerDef, Manifest, PoolRef, SceneDef};
 use kivori_assets::{AssetBlob, AssetError, FORMAT_VERSION, HEADER_LEN, MAGIC};
 use kivori_model::{
-    CompanionState, DeviceProfile, FrameRate, Keyframe, LayerKind, Point, Rgb565, Size,
+    CompanionState, DeviceProfile, FrameRate, Keyframe, LayerKind, LayerRole, Point, Rgb565, Size,
 };
 
 const PIXELS: [u8; 8] = [0x00, 0xF8, 0xE0, 0x07, 0x1F, 0x00, 0xFF, 0xFF]; // 4 RGB565 pixels, LE
+const ALPHA: [u8; 2] = [0xF0, 0x0F]; // four alpha4 pixels, even pixel in low nibble
 
 fn build_blob(manifest: &Manifest, pool: &[u8]) -> std::vec::Vec<u8> {
     let mut mbuf = [0u8; 4096];
@@ -35,6 +36,11 @@ fn sample_blob() -> std::vec::Vec<u8> {
         len: 4,
     };
     pool.extend_from_slice(b"idle");
+    let alpha = PoolRef {
+        offset: pool.len() as u32,
+        len: ALPHA.len() as u32,
+    };
+    pool.extend_from_slice(&ALPHA);
 
     let mut bitmaps = Vec::new();
     bitmaps
@@ -42,6 +48,7 @@ fn sample_blob() -> std::vec::Vec<u8> {
             size: Size::new(2, 2),
             frames: 1,
             data: bmp,
+            alpha: Some(alpha),
         })
         .unwrap();
     let mut strings = Vec::new();
@@ -63,6 +70,7 @@ fn sample_blob() -> std::vec::Vec<u8> {
                 asset: 0,
                 frame_size: Size::new(2, 2),
             },
+            role: LayerRole::Static,
             origin: Point::new(10, 10),
             keyframes,
         })
@@ -101,6 +109,7 @@ fn round_trips_a_blob() {
     let bmp = asset.bitmap(0).unwrap();
     assert_eq!(bmp.size, Size::new(2, 2));
     assert_eq!(asset.bitmap_pixels(bmp), Some(&PIXELS[..]));
+    assert_eq!(asset.bitmap_alpha(bmp), Some(&ALPHA[..]));
 
     assert_eq!(asset.string(0), Some("idle"));
 

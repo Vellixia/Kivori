@@ -26,6 +26,18 @@ export const strings = {
     desired: 'Desired',
     reported: 'Reported',
   },
+  firmwareUpdate: {
+    heading: 'Device firmware',
+    description:
+      'Install the bundled Kivori firmware for ESP32-C3 + ST7789, including the animated mascot.',
+    action: 'Flash firmware',
+    working: 'Updating firmware…',
+    preparing: 'Preparing firmware update…',
+    checking: 'Checking firmware availability…',
+    connect: 'Connect your device to enable flashing.',
+    caution: 'This replaces the device firmware. Keep USB connected until the update finishes.',
+    failed: 'Unable to start the firmware update.',
+  },
   diagnostics: {
     heading: 'Diagnostics',
     empty: 'No diagnostics recorded yet.',

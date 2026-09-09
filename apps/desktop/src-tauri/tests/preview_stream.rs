@@ -12,6 +12,43 @@ use kivori_desktop::render::render_preview_bundled;
 use kivori_model::{frame_step_ms, CompanionState};
 
 #[test]
+fn live_updates_keep_only_the_latest_timestamp() {
+    use kivori_desktop::render::animation::AnimationTimeline;
+    let control = StreamControl::default();
+    for ms in [33, 66, 100] {
+        control.update(
+            AnimationTimeline {
+                initial_state: "idle".into(),
+                events: vec![],
+            },
+            ms,
+        );
+    }
+    assert_eq!(control.take_request().unwrap().1, 100);
+    assert!(control.take_request().is_none());
+    control.update(
+        AnimationTimeline {
+            initial_state: "idle".into(),
+            events: vec![],
+        },
+        133,
+    );
+    let (_, _, revision) = control.take_request().unwrap();
+    assert!(control.is_current(revision));
+    control.update(
+        AnimationTimeline {
+            initial_state: "idle".into(),
+            events: vec![],
+        },
+        166,
+    );
+    assert!(
+        !control.is_current(revision),
+        "superseded frame must not be sent"
+    );
+}
+
+#[test]
 fn step_ms_matches_the_canonical_timeline_at_30fps() {
     // The stream's clock must be the same integer timeline the goldens use (Principle III).
     for step in [0u64, 1, 2, 29, 30, 31, 100, 12_345] {

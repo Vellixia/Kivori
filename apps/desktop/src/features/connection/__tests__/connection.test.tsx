@@ -12,6 +12,13 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('../../../lib/ipc', () => ({
+  getFirmwareStatus: async () => ({
+    available: true,
+    phase: 'idle',
+    message: 'Ready.',
+    imageSize: 1024,
+  }),
+  flashFirmware: vi.fn(),
   getConnectionStatus: (): Promise<ConnectionStatusDto | null> => Promise.resolve(h.state.current),
   onConnectionStatus: (cb: (s: ConnectionStatusDto) => void): Promise<() => void> => {
     h.subscribed.count += 1;

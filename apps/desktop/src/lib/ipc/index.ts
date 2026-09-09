@@ -12,6 +12,8 @@ import type {
   ConnectionStatusDto,
   DiagnosticEventDto,
   SendableState,
+  AnimationTimeline,
+  FirmwareStatusDto,
 } from './types';
 
 /// Handle returned by an event subscription; call it to unsubscribe.
@@ -20,6 +22,7 @@ export type Unlisten = () => void;
 /// A live preview-frame stream (contracts/ipc.md §3). `close()` cancels it natively.
 export interface PreviewStream {
   close: () => Promise<void>;
+  update?: (animation: AnimationTimeline, elapsedMs: number) => Promise<void>;
 }
 
 /// True when running inside the Tauri webview (the core injects this global in v2).
@@ -59,6 +62,26 @@ export async function getConnectionStatus(): Promise<ConnectionStatusDto> {
   return unavailable();
 }
 
+/** Firmware status belongs to the native runtime and survives Overview navigation. */
+export async function getFirmwareStatus(): Promise<FirmwareStatusDto> {
+  if (isTauri()) return invoke<FirmwareStatusDto>('get_firmware_status');
+  if (import.meta.env.DEV) {
+    return {
+      available: false,
+      phase: 'idle',
+      message: 'Open the native Kivori app to flash firmware.',
+      imageSize: 0,
+    };
+  }
+  return unavailable();
+}
+
+/** Installs only the bundled firmware on the already-connected device. */
+export async function flashFirmware(): Promise<void> {
+  if (isTauri()) return invoke<void>('flash_firmware');
+  return unavailable();
+}
+
 export async function listStates(): Promise<CompanionState[]> {
   if (isTauri()) return invoke<CompanionState[]>('list_states');
   if (import.meta.env.DEV) return (await devMock()).mockListStates();
@@ -85,9 +108,14 @@ export async function getDiagnostics(limit: number): Promise<DiagnosticEventDto[
 export async function renderPreviewFrame(
   state: CompanionState,
   elapsedMs: number,
+  animation?: AnimationTimeline,
 ): Promise<Uint8ClampedArray> {
   if (isTauri()) {
-    const buffer = await invoke<ArrayBuffer>('render_preview_frame', { state, elapsedMs });
+    const buffer = await invoke<ArrayBuffer>('render_preview_frame', {
+      state,
+      elapsedMs: Math.round(elapsedMs),
+      animation,
+    });
     return new Uint8ClampedArray(buffer);
   }
   if (import.meta.env.DEV) return (await devMock()).mockPreviewFrame(state, elapsedMs);
@@ -137,6 +165,8 @@ export async function openPreviewStream(
   state: CompanionState,
   fps: number,
   onFrame: (frame: Uint8ClampedArray) => void,
+  animation?: AnimationTimeline,
+  elapsedMs = 0,
 ): Promise<PreviewStream> {
   if (isTauri()) {
     const { Channel } = await import('@tauri-apps/api/core');
@@ -144,10 +174,23 @@ export async function openPreviewStream(
     channel.onmessage = (buffer): void => {
       onFrame(new Uint8ClampedArray(buffer));
       // Acknowledge so the native producer may render the next frame (bounded in-flight frames).
-      void invoke<boolean>('ack_preview_frame', { handle: channel.id });
+      void invoke<boolean>('ack_preview_frame', { handle: channel.id }).catch(() => {});
     };
-    const handle = await invoke<number>('open_preview_stream', { state, fps, channel });
+    const handle = await invoke<number>('open_preview_stream', {
+      state,
+      fps,
+      channel,
+      animation,
+      elapsedMs: Math.round(elapsedMs),
+    });
     return {
+      update: async (animation, elapsedMs): Promise<void> => {
+        await invoke('update_preview_stream', {
+          handle,
+          animation,
+          elapsedMs: Math.round(elapsedMs),
+        });
+      },
       close: async (): Promise<void> => {
         await invoke<boolean>('close_preview_stream', { handle });
       },

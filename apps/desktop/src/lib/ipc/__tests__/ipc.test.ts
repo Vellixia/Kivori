@@ -1,8 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { getAppInfo, getConnectionStatus, isTauri, listStates, renderPreviewFrame } from '../index';
+import {
+  flashFirmware,
+  getFirmwareStatus,
+  getAppInfo,
+  getConnectionStatus,
+  isTauri,
+  listStates,
+  renderPreviewFrame,
+} from '../index';
 import { COMPANION_STATES, PREVIEW_DIM } from '../types';
 
 describe('ipc wrappers (browser mock fallback)', () => {
+  it('never offers or pretends to flash a device from the browser mock', async () => {
+    expect(await getFirmwareStatus()).toMatchObject({ available: false, imageSize: 0 });
+    await expect(flashFirmware()).rejects.toThrow('native runtime is unavailable');
+  });
   it('is not running inside Tauri under jsdom', () => {
     expect(isTauri()).toBe(false);
   });

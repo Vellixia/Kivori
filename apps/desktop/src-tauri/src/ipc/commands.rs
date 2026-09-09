@@ -7,6 +7,7 @@
 
 use tauri::State;
 
+use crate::firmware::FirmwareStatus;
 use crate::ipc::dto::{self, AppInfoDto, ConnectionStatusDto, DiagnosticEventDto};
 use crate::runtime::state::{AppState, DeviceCommand};
 use kivori_model::CompanionState;
@@ -38,9 +39,29 @@ pub fn list_states() -> Vec<String> {
 /// Returns an error string if `state` is not a sendable token, or the device runtime is unavailable.
 #[tauri::command]
 pub fn set_desired_state(app: State<'_, AppState>, state: String) -> Result<(), String> {
+    if app.firmware_busy() {
+        return Err(
+            "Firmware update is in progress; wait for the device to reconnect.".to_string(),
+        );
+    }
     let desired =
         dto::sendable_from_token(&state).ok_or_else(|| format!("not a sendable state: {state}"))?;
     app.send_command(DeviceCommand::SetDesired(desired))
+}
+
+/// The fixed bundled firmware image and the native update workflow's safe status.
+#[tauri::command]
+pub fn get_firmware_status(app: State<'_, AppState>) -> FirmwareStatus {
+    app.firmware_status_snapshot()
+}
+
+/// Queues a flash of this application's fixed bundled firmware on the currently verified device.
+///
+/// The webview supplies neither a port nor a path. The device thread validates connection ownership,
+/// releases the serial link, programs the image, and verifies the same device after reconnecting.
+#[tauri::command]
+pub fn flash_firmware(app: State<'_, AppState>) -> Result<(), String> {
+    app.queue_firmware_flash()
 }
 
 /// Recent safe diagnostics, newest last, capped at `limit` (all builds).
@@ -62,7 +83,17 @@ pub fn get_diagnostics(app: State<'_, AppState>, limit: u16) -> Vec<DiagnosticEv
 pub fn render_preview_frame(
     state: String,
     elapsed_ms: u32,
+    animation: Option<crate::render::animation::AnimationTimeline>,
 ) -> Result<tauri::ipc::Response, String> {
+    if let Some(animation) = animation {
+        return Ok(tauri::ipc::Response::new(
+            crate::render::render_animation_rgba(
+                crate::render::bundled_blob(),
+                &animation,
+                elapsed_ms,
+            )?,
+        ));
+    }
     let companion = dto::companion_from_token(&state)
         .ok_or_else(|| format!("unknown companion state: {state}"))?;
     Ok(tauri::ipc::Response::new(
@@ -77,6 +108,11 @@ pub fn render_preview_frame(
 #[cfg(feature = "device-studio")]
 #[tauri::command]
 pub fn mirror_state(app: State<'_, AppState>, state: String) -> Result<(), String> {
+    if app.firmware_busy() {
+        return Err(
+            "Firmware update is in progress; wait for the device to reconnect.".to_string(),
+        );
+    }
     let desired =
         dto::sendable_from_token(&state).ok_or_else(|| format!("not a sendable state: {state}"))?;
     app.send_command(DeviceCommand::SetDesired(desired))

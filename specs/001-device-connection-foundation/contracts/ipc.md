@@ -16,6 +16,8 @@ crossing the boundary (they mirror [data-model.md](../data-model.md) but carry n
 |---------|------|---------|--------------|
 | `get_app_info` | — | `AppInfoDto` | all builds |
 | `get_connection_status` | — | `ConnectionStatusDto` | all builds |
+| `get_firmware_status` | — | `FirmwareStatusDto` | all builds |
+| `flash_firmware` | — | `Result<()>` (request accepted) | all builds |
 | `set_desired_state` | `{ state: SendableState }` | `Result<()>` | all builds |
 | `get_diagnostics` | `{ limit: u16 }` | `DiagnosticEventDto[]` | all builds |
 | `list_states` | — | `CompanionState[]` | all builds |
@@ -34,6 +36,21 @@ crossing the boundary (they mirror [data-model.md](../data-model.md) but carry n
   route is also build-flag gated (FR-028).
 
 ## 2. Events (core → webview, broadcast)
+
+Firmware updates use native-owned status, polled by Overview every 750 ms. `flash_firmware` accepts
+no firmware path, executable path, port, or command-line arguments. It installs only the firmware
+embedded in the desktop build onto the already-connected device. The native boundary rejects
+disconnected and concurrent requests. Acceptance is not completion: the UI waits for the status to
+reach `succeeded` after flashing and a verified reconnection. A failed flash is surfaced as `failed`.
+
+```ts
+interface FirmwareStatusDto {
+  available: boolean;
+  phase: 'idle' | 'preparing' | 'flashing' | 'reconnecting' | 'succeeded' | 'failed';
+  message: string;
+  imageSize: number;
+}
+```
 
 | Event | Payload | When |
 |-------|---------|------|
@@ -106,3 +123,12 @@ interface DiagnosticEventDto {            // safe-diagnostics allowlist ONLY (AD
   (SC-010).
 - A canvas test feeds known RGBA bytes through the blit wrapper and asserts `putImageData` is called with
   them unmodified (constraint 2).
+# Mascot preview amendment (2026-09-08)
+
+Dev-only `render_preview_frame` and `open_preview_stream` accept optional `animation`:
+`{ initialState, events: [{ atMs, state }] }`. Events use existing companion tokens, are ordered by
+integer milliseconds, and are capped at 256. `open_preview_stream` also accepts `elapsedMs`.
+Supplying animation selects externally-clocked playback. `update_preview_stream(handle, animation,
+elapsedMs)` coalesces pending requests without recreating the channel. Pause/seek uses the same
+history through `render_preview_frame`. Raw RGBA delivery and acknowledgement remain unchanged.
+Legacy calls without animation still work. These additions do not expose any production device commands.

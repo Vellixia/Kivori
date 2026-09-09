@@ -15,7 +15,7 @@ use kivori_model::{AssetId, CompanionState, DeviceProfile, StringId};
 /// Blob magic (`"KASS"`, little-endian).
 pub const MAGIC: u32 = 0x5353_414B;
 /// Supported blob format version.
-pub const FORMAT_VERSION: u16 = 1;
+pub const FORMAT_VERSION: u16 = 2;
 /// Fixed header length in bytes.
 pub const HEADER_LEN: usize = 16;
 
@@ -99,6 +99,13 @@ impl<'a> AssetBlob<'a> {
     #[must_use]
     pub fn bitmap_pixels(&self, entry: &BitmapEntry) -> Option<&[u8]> {
         self.pool_slice(entry.data.offset, entry.data.len)
+    }
+
+    /// Packed alpha4 bytes for `entry`, or `None` when it is explicitly opaque or malformed.
+    #[must_use]
+    pub fn bitmap_alpha(&self, entry: &BitmapEntry) -> Option<&[u8]> {
+        let alpha = entry.alpha?;
+        self.pool_slice(alpha.offset, alpha.len)
     }
 
     /// The UTF-8 string for `id`, borrowed zero-copy from the pool.

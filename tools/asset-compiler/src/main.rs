@@ -1,5 +1,5 @@
 //! Kivori asset compiler (host) — compiles the placeholder scene SVGs into the deterministic RGB565
-//! asset blob and writes it to `assets/compiled/kivori.assets` (ADR-0004, Principle XI).
+//! mascot asset blob and writes it to `assets/compiled/kivori.assets` (ADR-0004, Principle XI).
 
 use std::fs;
 use std::path::Path;
@@ -12,8 +12,9 @@ fn main() {
     }
     fs::write(out, &blob).expect("write asset blob");
     eprintln!(
-        "kivori-asset-compiler: wrote {} bytes to {}",
+        "kivori-asset-compiler: wrote {} bytes ({:.1}% of 128 KiB) to {}",
         blob.len(),
+        blob.len() as f64 / 131_072.0 * 100.0,
         out.display()
     );
 }

@@ -1,0 +1,64 @@
+//! Export reviewable canonical device pixels, not a second renderer.
+//! Run: cargo run -p kivori-golden-frames --example mascot_review
+use kivori_asset_compiler::compile_default_blob;
+use kivori_assets::AssetBlob;
+use kivori_framebuffer::TileBand;
+use kivori_model::{CompanionState, MascotAnimator, Rect, Rgb565};
+use kivori_renderer::{frame_hash, render_pose, render_scene};
+use std::{fs, io::Write, path::Path};
+
+fn ppm(path: &Path, pixels: &[Rgb565]) {
+    let mut out = fs::File::create(path).unwrap();
+    writeln!(out, "P6\n240 240\n255").unwrap();
+    for pixel in pixels {
+        let (r, g, b) = pixel.to_rgb888();
+        out.write_all(&[r, g, b]).unwrap();
+    }
+}
+
+fn main() {
+    let directory = Path::new("assets/compiled/review");
+    fs::create_dir_all(directory).unwrap();
+    let bytes = compile_default_blob();
+    let blob = AssetBlob::parse(&bytes).unwrap();
+    println!(
+        "blob_bytes={} animator_bytes={} pose_bytes={}",
+        bytes.len(),
+        std::mem::size_of::<MascotAnimator>(),
+        std::mem::size_of::<kivori_model::MascotPose>()
+    );
+    for state in CompanionState::ALL {
+        let name = format!("{state:?}").to_lowercase();
+        let source = fs::read(format!("assets/scenes/{name}.svg")).unwrap();
+        let old = kivori_asset_compiler::rasterize::svg_to_rgb565(&source, 240, 240).unwrap();
+        let old_pixels: Vec<_> = old
+            .chunks_exact(2)
+            .map(|p| Rgb565::from_raw(u16::from_le_bytes([p[0], p[1]])))
+            .collect();
+        ppm(&directory.join(format!("before-{name}.ppm")), &old_pixels);
+        for ms in [0, 300, 600, 1200, 2400, 3600] {
+            let mut pixels = vec![Rgb565::from_raw(0); 240 * 240];
+            let mut band = TileBand::new(Rect::new(0, 0, 240, 240), &mut pixels).unwrap();
+            render_scene(&blob, blob.scene(state).unwrap(), ms, &mut band).unwrap();
+            let name = format!("{state:?}-{ms}").to_lowercase();
+            println!("{name}=0x{:016X}", frame_hash(&pixels));
+            ppm(&directory.join(format!("{name}.ppm")), &pixels);
+        }
+    }
+    let mut animator = MascotAnimator::new(CompanionState::Idle, 0);
+    animator.set_state(CompanionState::Happy, 100);
+    animator.set_state(CompanionState::Sleeping, 250);
+    for ms in [250, 400, 600, 849, 850] {
+        let mut pixels = vec![Rgb565::from_raw(0); 240 * 240];
+        let mut band = TileBand::new(Rect::new(0, 0, 240, 240), &mut pixels).unwrap();
+        render_pose(
+            &blob,
+            blob.scene(animator.target()).unwrap(),
+            &animator.pose_at(ms),
+            &mut band,
+        )
+        .unwrap();
+        println!("transition-{ms}=0x{:016X}", frame_hash(&pixels));
+        ppm(&directory.join(format!("transition-{ms}.ppm")), &pixels);
+    }
+}

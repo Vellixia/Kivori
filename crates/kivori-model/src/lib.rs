@@ -15,6 +15,7 @@ pub mod capabilities;
 pub mod color;
 pub mod connection;
 pub mod geometry;
+pub mod mascot;
 pub mod profile;
 pub mod scene;
 pub mod state;
@@ -25,9 +26,13 @@ pub use capabilities::Capabilities;
 pub use color::Rgb565;
 pub use connection::{ConnectionEvent, ConnectionState};
 pub use geometry::{Point, Rect, Size};
+pub use mascot::{
+    MascotAnimator, MascotPose, MASCOT_ANCHOR, MASCOT_SLEEP_TRANSITION_MS, MASCOT_TRANSITION_MS,
+    SCALE_Q8_ONE,
+};
 pub use profile::{ColorFormat, DeviceProfile, PanelController, ProfileError, TileConfig};
 pub use scene::{
-    resolve_transform, AssetId, FontId, Keyframe, LayerKind, ResolvedTransform, StringId,
+    resolve_transform, AssetId, FontId, Keyframe, LayerKind, LayerRole, ResolvedTransform, StringId,
 };
 pub use state::{CompanionState, LifecycleState, NotSendable, SendableState};
 pub use timeline::{frame_step_ms, scene_frame, ElapsedMs, FrameRate, StudioTimeline, PREVIEW_FPS};

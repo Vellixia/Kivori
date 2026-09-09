@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { DevicePreview } from '../../lib/canvas/DevicePreview';
 import { openPreviewStream, type PreviewStream } from '../../lib/ipc';
 import { PREVIEW_FPS } from '../../lib/ipc/types';
+import type { AnimationTimeline } from '../../lib/ipc/types';
 import { strings } from '../../lib/i18n/strings';
 import { Controls } from './Controls';
 import { useStudioStore } from './store';
@@ -19,17 +20,24 @@ export function DeviceStudio(): ReactElement {
   const state = useStudioStore((s) => s.state);
   const elapsedMs = useStudioStore((s) => s.elapsedMs);
   const playing = useStudioStore((s) => s.playing);
+  const events = useStudioStore((s) => s.events);
+  const animation = useMemo<AnimationTimeline>(() => ({ initialState: 'idle', events }), [events]);
   const advance = useStudioStore((s) => s.advance);
   const rafRef = useRef<number | null>(null);
   const [streamFrame, setStreamFrame] = useState<Uint8ClampedArray | null>(null);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const requestRef = useRef({ state, animation, elapsedMs });
+  requestRef.current = { state, animation, elapsedMs };
 
   // Advance the timeline while playing (drift-free integer stepping lives in the store).
   useEffect(() => {
     if (!playing) return;
-    let last = performance.now();
+    const started = performance.now();
+    let last = 0;
     const tick = (now: number): void => {
-      advance(now - last);
-      last = now;
+      const elapsed = Math.round(now - started);
+      advance(elapsed - last);
+      last = elapsed;
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
@@ -38,7 +46,8 @@ export function DeviceStudio(): ReactElement {
     };
   }, [playing, advance]);
 
-  // Open a native frame stream while playing; close it on pause, state change, or unmount.
+  // One stream per playback session. Coalesce timeline updates so a slow native renderer
+  // cannot accumulate requests; the same explicit timestamp drives stream and scrub paths.
   useEffect(() => {
     if (!playing) {
       setStreamFrame(null);
@@ -46,18 +55,51 @@ export function DeviceStudio(): ReactElement {
     }
     let active = true;
     let stream: PreviewStream | null = null;
-    void openPreviewStream(state, PREVIEW_FPS, (frame) => {
-      if (active) setStreamFrame(frame);
-    }).then((opened) => {
-      if (active) stream = opened;
-      else void opened.close();
-    });
+    let updating = false;
+    setStreamError(null);
+    const current = requestRef.current;
+    void openPreviewStream(
+      current.state,
+      PREVIEW_FPS,
+      (frame) => {
+        if (active) setStreamFrame(frame);
+      },
+      current.animation,
+      current.elapsedMs,
+    )
+      .then((opened) => {
+        if (active) stream = opened;
+        else void opened.close().catch(() => {});
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setStreamFrame(null);
+          setStreamError(String(error));
+        }
+      });
+    const updates = setInterval(() => {
+      if (!stream?.update || updating) return;
+      updating = true;
+      const request = requestRef.current;
+      void stream
+        .update(request.animation, request.elapsedMs)
+        .catch((error: unknown) => {
+          if (active) {
+            setStreamFrame(null);
+            setStreamError(String(error));
+          }
+        })
+        .finally(() => {
+          updating = false;
+        });
+    }, 1000 / PREVIEW_FPS);
     return () => {
       active = false;
+      clearInterval(updates);
       setStreamFrame(null);
-      void stream?.close();
+      void stream?.close().catch(() => {});
     };
-  }, [playing, state]);
+  }, [playing]);
 
   const t = strings.studio;
   return (
@@ -75,8 +117,11 @@ export function DeviceStudio(): ReactElement {
               state={state}
               elapsedMs={elapsedMs}
               label={t.preview}
-              frame={playing ? streamFrame : null}
+              frame={playing && !streamError ? streamFrame : null}
+              animation={animation}
+              streaming={playing && !streamError}
             />
+            {streamError && <p role="alert">{streamError}</p>}
           </CardContent>
         </Card>
         <Card>

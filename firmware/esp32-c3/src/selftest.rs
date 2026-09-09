@@ -18,7 +18,7 @@
 use crate::health::{build_health, build_pong};
 use crate::ports::Clock;
 use crate::proto::{DeviceIdentity, Dispatcher};
-use crate::render::{TileRenderer, TILE_H, TILE_W};
+use crate::render::{TileRenderer, TILE_COLS, TILE_COUNT, TILE_H, TILE_W};
 use crate::sim_probe::{LoopbackTransport, TileProbe};
 use crate::state::{DeviceEvent, DeviceState};
 use esp_println::println;
@@ -264,11 +264,12 @@ pub fn run<C: Clock>(clock: &C) -> bool {
                 .is_ok();
             check(&mut pass, rendered, "render-ok");
             let bands = probe.records();
-            check(&mut pass, bands.len() == 6, "tile-count-6");
+            check(&mut pass, bands.len() == TILE_COUNT, "tile-count-36");
             let geometry_ok = bands.iter().enumerate().all(|(i, r)| {
                 r.rect.w == TILE_W
                     && r.rect.h == TILE_H
-                    && r.rect.y == i as u16 * TILE_H
+                    && r.rect.x == (i % TILE_COLS) as u16 * TILE_W
+                    && r.rect.y == (i / TILE_COLS) as u16 * TILE_H
                     && r.pixels == TILE_W as usize * TILE_H as usize
             });
             check(&mut pass, geometry_ok, "tile-geometry-rgb565");
@@ -286,7 +287,7 @@ pub fn run<C: Clock>(clock: &C) -> bool {
             let _ = renderer.render(&blob, CompanionState::Happy, 0, &mut probe);
             check(
                 &mut pass,
-                probe.flushes == 6,
+                probe.flushes as usize == TILE_COUNT,
                 "change-driven-reflush-on-change",
             );
             println!("{TAG} INFO preview-fps={PREVIEW_FPS}");
