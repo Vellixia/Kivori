@@ -207,7 +207,7 @@ pub fn run_mode(
             patch: 0,
         },
 
-        capabilities: Capabilities::NONE,
+        capabilities: Capabilities::MASCOT_INTERACTION,
     };
 
     esp_println::println!("KIVORI runtime starting");

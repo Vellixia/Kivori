@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use tauri::AppHandle;
 
+use crate::companion::CompanionDirector;
 use crate::device::discovery::DEFAULT_ALLOWLIST;
 use crate::device::fsm::{ConnectionManager, ManagerEvent};
 use crate::device::reconnect::base_delay_ms;
@@ -28,6 +29,7 @@ use crate::ipc::dto::{connection_status, ConnectionStatusDto};
 use crate::ipc::events;
 use crate::orchestrator::Orchestrator;
 use crate::runtime::state::DeviceCommand;
+use kivori_model::{CompanionState, MascotPersonality};
 
 const TICK: Duration = Duration::from_millis(50);
 
@@ -121,6 +123,7 @@ fn device_loop(
     let mut manager = ConnectionManager::new();
     let mut orchestrator = Orchestrator::new();
     let mut session = Session::new(SessionConfig::default());
+    let mut companion = CompanionDirector::new(MascotPersonality::Cozy, true, 0x4B49_564F, 0);
     let mut link: Option<SerialPortLink> = None;
     let mut connected_port: Option<String> = None;
     let mut retry_at: Option<Instant> = None;
@@ -133,7 +136,14 @@ fn device_loop(
     publish_firmware_status(&firmware_status, &flash);
     let started = Instant::now();
 
-    let mut last = connection_status(&manager, &orchestrator, session.reported());
+    let mut last = connection_status(
+        &manager,
+        &orchestrator,
+        session.reported(),
+        session.supports_mascot_interaction(),
+        session.last_mascot_action_applied(),
+        session.connection_generation(),
+    );
     *status.lock().expect("status lock") = last.clone();
     events::emit_status(&app, &last);
     let mut previous_state = manager.state();
@@ -156,6 +166,41 @@ fn device_loop(
                             orchestrator.set_desired(state);
                             false
                         }
+                    };
+                    if write_failed {
+                        recover_link(
+                            &mut manager,
+                            ManagerEvent::IoError,
+                            &mut link,
+                            &mut connected_port,
+                            &mut retry_at,
+                            &mut deadlines,
+                            &flash,
+                        );
+                    }
+                }
+                DeviceCommand::ConfigureCompanion {
+                    personality,
+                    self_play,
+                } => {
+                    let now = elapsed_ms(started.elapsed());
+                    companion.set_personality(personality, now);
+                    companion.set_self_play(self_play, now);
+                }
+                DeviceCommand::PlayMascotAction(_) if flash.is_busy() => {}
+                DeviceCommand::PlayMascotAction(action) => {
+                    let cue = companion.manual(action);
+                    let write_failed = match link.as_mut() {
+                        Some(open_link) => session
+                            .play_mascot_action(
+                                open_link,
+                                &manager,
+                                cue.action,
+                                cue.personality,
+                                cue.seed,
+                            )
+                            .is_err(),
+                        None => false,
                     };
                     if write_failed {
                         recover_link(
@@ -301,8 +346,44 @@ fn device_loop(
             }
         }
 
+        // Desktop owns ambient behavior. Suppressed/disconnected states consume due opportunities,
+        // preventing stale antics from firing immediately after focus work or reconnect.
+        let companion_state = if manager.state().can_drive_device() {
+            session
+                .reported()
+                .unwrap_or_else(|| orchestrator.desired().to_companion())
+        } else {
+            CompanionState::Offline
+        };
+        if let Some(cue) = companion.poll(elapsed_ms(started.elapsed()), companion_state) {
+            let write_failed = match link.as_mut() {
+                Some(open_link) => session
+                    .play_mascot_action(open_link, &manager, cue.action, cue.personality, cue.seed)
+                    .is_err(),
+                None => false,
+            };
+            if write_failed {
+                recover_link(
+                    &mut manager,
+                    ManagerEvent::IoError,
+                    &mut link,
+                    &mut connected_port,
+                    &mut retry_at,
+                    &mut deadlines,
+                    &flash,
+                );
+            }
+        }
+
         // 3. Publish + emit the snapshot on change.
-        let snapshot = connection_status(&manager, &orchestrator, session.reported());
+        let snapshot = connection_status(
+            &manager,
+            &orchestrator,
+            session.reported(),
+            session.supports_mascot_interaction(),
+            session.last_mascot_action_applied(),
+            session.connection_generation(),
+        );
         if snapshot != last {
             *status.lock().expect("status lock") = snapshot.clone();
             events::emit_status(&app, &snapshot);

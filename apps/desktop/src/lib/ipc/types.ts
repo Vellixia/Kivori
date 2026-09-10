@@ -3,6 +3,8 @@
 
 export type SendableState = 'idle' | 'happy' | 'busy' | 'sleeping';
 export type CompanionState = 'booting' | 'idle' | 'happy' | 'busy' | 'sleeping' | 'offline';
+export type MascotPersonality = 'cozy' | 'playful' | 'calm';
+export type MascotAction = 'greet' | 'pet' | 'tickle' | 'surprise' | 'comfort';
 export type ConnectionState =
   'connecting' | 'connected' | 'incompatible' | 'disconnected' | 'error';
 
@@ -38,6 +40,17 @@ export interface ConnectionStatusDto {
   device: DeviceInfoDto | null;
   incompatibleReason: string | null;
   retryCount: number;
+  /** Within-process device-session identity; changes when device uptime may reset. */
+  connectionGeneration: number;
+  mascotInteraction: boolean;
+  mascotAction: MascotActionAppliedDto | null;
+}
+
+export interface MascotActionAppliedDto {
+  action: MascotAction;
+  personality: MascotPersonality;
+  seed: number;
+  appliedAtMs: number;
 }
 
 export type DiagnosticCategory =
@@ -79,8 +92,21 @@ export interface AnimationEvent {
   state: CompanionState;
 }
 
+/** One deterministic social reaction replayed by the native mascot animator. */
+export interface MascotActionEvent {
+  atMs: number;
+  action: MascotAction;
+  personality: MascotPersonality;
+  seed: number;
+  /** Original device uptime from an applied-action acknowledgment. */
+  deviceAppliedAtMs?: number;
+  /** Device session in which the action was applied. */
+  connectionGeneration?: number;
+}
+
 export interface AnimationTimeline {
   initialState: CompanionState;
   events: AnimationEvent[];
+  actionEvents: MascotActionEvent[];
 }
 export const MAX_ANIMATION_EVENTS = 256;

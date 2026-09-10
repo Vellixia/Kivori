@@ -43,7 +43,7 @@ fn identity() -> DeviceIdentity {
             minor: 0,
             patch: 0,
         },
-        capabilities: Capabilities::NONE,
+        capabilities: Capabilities::MASCOT_INTERACTION,
     }
 }
 

@@ -10,7 +10,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use kivori_model::SendableState;
+use kivori_model::{MascotAction, MascotPersonality, SendableState};
 
 use crate::diagnostics::DiagnosticsLog;
 use crate::firmware::{self, FirmwarePhase, FirmwareStatus};
@@ -22,6 +22,15 @@ use crate::window_lifecycle::WindowLifecycle;
 pub enum DeviceCommand {
     /// Set the desired sendable state; transmitted to the device when connected (FR-012).
     SetDesired(SendableState),
+    /// Change desktop-owned mascot personality and autonomous-play preference.
+    ConfigureCompanion {
+        /// Selected movement temperament.
+        personality: MascotPersonality,
+        /// Whether desktop may schedule ambient social actions.
+        self_play: bool,
+    },
+    /// Play one immediate social reaction using current companion settings.
+    PlayMascotAction(MascotAction),
     /// Flash the fixed firmware image embedded in this desktop build.
     FlashFirmware,
     /// Re-publish the current status (used by an explicit UI resync).

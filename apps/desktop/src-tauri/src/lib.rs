@@ -4,6 +4,7 @@
 //! firmware (constitution Principle II). The Tauri command surface, connection manager, and window
 //! lifecycle are added in their feature phases; the binary (`main.rs`) wires them together.
 
+pub mod companion;
 pub mod device;
 pub mod diagnostics;
 pub mod firmware;
@@ -60,6 +61,8 @@ pub fn run() {
         ipc::commands::get_connection_status,
         ipc::commands::list_states,
         ipc::commands::set_desired_state,
+        ipc::commands::configure_companion,
+        ipc::commands::play_mascot_action,
         ipc::commands::get_diagnostics,
         ipc::commands::get_firmware_status,
         ipc::commands::flash_firmware,
@@ -76,6 +79,8 @@ pub fn run() {
         ipc::commands::get_connection_status,
         ipc::commands::list_states,
         ipc::commands::set_desired_state,
+        ipc::commands::configure_companion,
+        ipc::commands::play_mascot_action,
         ipc::commands::get_diagnostics,
         ipc::commands::get_firmware_status,
         ipc::commands::flash_firmware,

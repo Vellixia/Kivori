@@ -8,6 +8,7 @@ import { getConnectionStatus, onConnectionStatus, type Unlisten } from '../../li
 import type { ConnectionStatusDto } from '../../lib/ipc/types';
 import { strings } from '../../lib/i18n/strings';
 import { FirmwareUpdate } from './FirmwareUpdate';
+import { CompanionControls } from './CompanionControls';
 
 /// The six UI states the user sees (derived from the connection axis + retry count).
 type UiStatus =
@@ -117,6 +118,11 @@ export function ConnectionStatus(): ReactElement {
               </dd>
             </div>
           </dl>
+          <Separator />
+          <CompanionControls
+            connected={status?.connection === 'connected'}
+            supported={status?.mascotInteraction ?? false}
+          />
           <Separator />
           <FirmwareUpdate connected={status?.connection === 'connected'} />
         </CardContent>

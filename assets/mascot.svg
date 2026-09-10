@@ -48,12 +48,16 @@
       <g fill="#02060c"><ellipse cx="82" cy="133" rx="11" ry="12"/><ellipse cx="158" cy="133" rx="11" ry="12"/></g>
       <g fill="#e7eef5"><circle cx="79" cy="129" r="4"/><circle cx="155" cy="129" r="4"/></g>
     </g>
+    <g id="eyes-affectionate" fill="none" stroke="#02060c" stroke-width="5" stroke-linecap="round">
+      <path d="M70 131 Q82 142 94 131"/><path d="M146 131 Q158 142 170 131"/>
+    </g>
     <g id="mouth-idle" fill="none" stroke="#02060c" stroke-width="5.5" stroke-linecap="round"><path d="M104 152 Q120 172 136 152"/></g>
     <g id="mouth-booting" fill="#02060c"><ellipse cx="120" cy="156" rx="5" ry="7"/></g>
     <g id="mouth-happy"><path d="M101 149 Q120 155 139 149 C138 173 103 173 101 149Z" fill="#02060c"/><path d="M109 163 Q120 157 131 163 Q120 171 109 163Z" fill="#ff91b2"/></g>
     <g id="mouth-busy" fill="none" stroke="#02060c" stroke-width="4" stroke-linecap="round"><path d="M111 158 Q120 162 129 158"/></g>
     <g id="mouth-sleeping" fill="#02060c"><ellipse cx="120" cy="157" rx="4" ry="5"/></g>
     <g id="mouth-offline" fill="none" stroke="#02060c" stroke-width="4" stroke-linecap="round"><path d="M110 159 Q120 164 130 159"/></g>
+    <g id="mouth-laughing"><path d="M101 150 Q120 158 139 150 C138 176 102 176 101 150Z" fill="#02060c"/><path d="M108 166 Q120 157 132 166 Q120 176 108 166Z" fill="#ff91b2"/></g>
   </defs>
   <use href="#body"/>
   <use href="#eyes-idle"/>

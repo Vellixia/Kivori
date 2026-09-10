@@ -386,7 +386,7 @@ pub const BOOT_ONLY_MARKERS: &[&str] = &[
     // Production-runtime markers the firmware emits exactly once, before any injection:
     "KIVORI-RUN BOOT",
     "lifecycle-booting-to-offline",
-    "first-frame-six-tiles",
+    "first-frame-36-tiles",
     "unchanged-frame-no-reflush",
     "health-report",
 ];
@@ -421,7 +421,7 @@ pub fn production_runtime() -> String {
     // second tick can observe a quiet frame — pinned by `emission_order_is_stable` in
     // firmware/esp32-c3/tests/production_runtime.rs.
     wait(&mut s, "KIVORI-RUN PASS lifecycle-booting-to-offline");
-    wait(&mut s, "KIVORI-RUN PASS first-frame-six-tiles");
+    wait(&mut s, "KIVORI-RUN PASS first-frame-36-tiles");
     wait(&mut s, "KIVORI-RUN PASS health-report");
     wait(&mut s, "KIVORI-RUN PASS unchanged-frame-no-reflush");
     // Handshake.

@@ -205,6 +205,10 @@ impl<'a> Runtime<'a> {
         if self.animator.target() != state {
             self.animator.set_state(state, now);
         }
+        if let Some(action) = self.dispatcher.take_mascot_action() {
+            self.animator
+                .trigger_action(action.action, action.personality, action.seed, now);
+        }
         // 3. Render on the frame cadence: only changed tiles reach the panel (FR-013).
         if now >= self.next_frame_ms {
             self.next_frame_ms =

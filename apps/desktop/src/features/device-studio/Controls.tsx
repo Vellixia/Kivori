@@ -4,12 +4,14 @@ import { Button } from '../../components/ui/button';
 import { Slider } from '../../components/ui/slider';
 import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
 import { mirrorState } from '../../lib/ipc';
-import type { CompanionState, SendableState } from '../../lib/ipc/types';
+import type { CompanionState, MascotAction, SendableState } from '../../lib/ipc/types';
 import { COMPANION_STATES, SENDABLE_STATES, MAX_ANIMATION_EVENTS } from '../../lib/ipc/types';
 import { strings } from '../../lib/i18n/strings';
+import { currentMascotPersonality } from '../connection/CompanionControls';
 import { SCENE_DURATION_MS, STEP_MS, useStudioStore } from './store';
 
 const SENDABLE = new Set<CompanionState>(SENDABLE_STATES);
+const ACTIONS: readonly MascotAction[] = ['greet', 'pet', 'tickle', 'surprise', 'comfort'];
 
 /** Device Studio control surface: state selection, timeline scrub, transport, and mirror-to-device. */
 export function Controls(): ReactElement {
@@ -17,6 +19,7 @@ export function Controls(): ReactElement {
   const elapsedMs = useStudioStore((s) => s.elapsedMs);
   const playing = useStudioStore((s) => s.playing);
   const setState = useStudioStore((s) => s.setState);
+  const playAction = useStudioStore((s) => s.playAction);
   const seek = useStudioStore((s) => s.seek);
   const step = useStudioStore((s) => s.step);
   const toggle = useStudioStore((s) => s.toggle);
@@ -51,6 +54,23 @@ export function Controls(): ReactElement {
         </ToggleGroup>
       </fieldset>
       {eventLimit && <p>Restart the preview to record more state changes.</p>}
+
+      <fieldset className="space-y-3">
+        <legend className="text-sm font-medium">{strings.companion.actions}</legend>
+        <div className="flex flex-wrap gap-2">
+          {ACTIONS.map((action) => (
+            <Button
+              key={action}
+              type="button"
+              variant="outline"
+              disabled={eventLimit}
+              onClick={() => playAction(action, currentMascotPersonality())}
+            >
+              {strings.companion.actionLabels[action]}
+            </Button>
+          ))}
+        </div>
+      </fieldset>
 
       <div className="scrub space-y-2">
         <div className="flex items-center justify-between gap-3 text-sm">

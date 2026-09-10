@@ -14,6 +14,8 @@ import type {
   SendableState,
   AnimationTimeline,
   FirmwareStatusDto,
+  MascotAction,
+  MascotPersonality,
 } from './types';
 
 /// Handle returned by an event subscription; call it to unsubscribe.
@@ -90,6 +92,23 @@ export async function listStates(): Promise<CompanionState[]> {
 
 export async function setDesiredState(state: SendableState): Promise<void> {
   if (isTauri()) return invoke<void>('set_desired_state', { state });
+  if (import.meta.env.DEV) return;
+  return unavailable();
+}
+
+/** Saves current desktop-owned companion behavior settings in the native runtime. */
+export async function configureCompanion(
+  personality: MascotPersonality,
+  selfPlay: boolean,
+): Promise<void> {
+  if (isTauri()) return invoke<void>('configure_companion', { personality, selfPlay });
+  if (import.meta.env.DEV) return;
+  return unavailable();
+}
+
+/** Plays one social reaction on a compatible connected device. */
+export async function playMascotAction(action: MascotAction): Promise<void> {
+  if (isTauri()) return invoke<void>('play_mascot_action', { action });
   if (import.meta.env.DEV) return;
   return unavailable();
 }

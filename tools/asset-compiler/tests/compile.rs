@@ -14,13 +14,13 @@ fn blob_is_byte_reproducible_and_within_budget() {
 }
 
 #[test]
-fn blob_has_six_four_layer_scenes_and_reused_body() {
+fn blob_has_six_four_layer_scenes_and_shared_expression_sheets() {
     let blob = compile_default_blob();
     let asset = AssetBlob::parse(&blob).expect("blob parses");
     assert_eq!(
         asset.manifest().bitmaps.len(),
-        13,
-        "one body + six eyes + six mouths"
+        3,
+        "one body + one eye sheet + one mouth sheet"
     );
 
     for state in CompanionState::ALL {
@@ -46,6 +46,16 @@ fn blob_has_six_four_layer_scenes_and_reused_body() {
         assert!(
             matches!(scene.layers[3].kind, LayerKind::Sprite { frame_size, .. } if frame_size.w == 48 && frame_size.h == 24)
         );
+        let eyes = match scene.layers[1].kind {
+            LayerKind::Sprite { asset, .. } => asset,
+            _ => panic!("eyes are sprites"),
+        };
+        let mouth = match scene.layers[3].kind {
+            LayerKind::Sprite { asset, .. } => asset,
+            _ => panic!("mouth is sprite"),
+        };
+        assert_eq!(asset.bitmap(eyes).unwrap().frames, 7);
+        assert_eq!(asset.bitmap(mouth).unwrap().frames, 7);
     }
 
     let first_body = match asset.scene(CompanionState::Booting).unwrap().layers[0].kind {

@@ -45,7 +45,7 @@ fn identity() -> DeviceIdentity {
             minor: 0,
             patch: 0,
         },
-        capabilities: Capabilities::NONE,
+        capabilities: Capabilities::MASCOT_INTERACTION,
     }
 }
 
@@ -83,6 +83,8 @@ fn kind_name(message: &Message) -> &'static str {
         Message::Health(_) => "Health",
         Message::Diagnostic(_) => "Diagnostic",
         Message::Error(_) => "Error",
+        Message::PlayMascotAction(_) => "PlayMascotAction",
+        Message::MascotActionApplied(_) => "MascotActionApplied",
     }
 }
 

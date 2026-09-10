@@ -43,4 +43,13 @@ for index, state in enumerate(states):
         start = ((index // 3 * 240 + row) * 720 + index % 3 * 240) * 3
         sheet[start:start + 720] = pixels[row * 720:(row + 1) * 720]
 png(OUT / "before.png", 720, 480, sheet)
+
+idle_times = [20877, 21227, 21377, 21457, 22277]
+idle_sheet = bytearray(1200 * 240 * 3)
+for index, elapsed_ms in enumerate(idle_times):
+    pixels = ppm(OUT / f"idle-life-{elapsed_ms}.ppm")
+    for row in range(240):
+        start = (row * 1200 + index * 240) * 3
+        idle_sheet[start:start + 720] = pixels[row * 720:(row + 1) * 720]
+png(OUT / "idle-life.png", 1200, 240, idle_sheet)
 print(OUT / "states.png")

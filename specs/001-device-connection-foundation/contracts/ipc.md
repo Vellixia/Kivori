@@ -19,6 +19,8 @@ crossing the boundary (they mirror [data-model.md](../data-model.md) but carry n
 | `get_firmware_status` | — | `FirmwareStatusDto` | all builds |
 | `flash_firmware` | — | `Result<()>` (request accepted) | all builds |
 | `set_desired_state` | `{ state: SendableState }` | `Result<()>` | all builds |
+| `configure_companion` | `{ personality: MascotPersonality, selfPlay: boolean }` | `Result<()>` | all builds |
+| `play_mascot_action` | `{ action: MascotAction }` | `Result<()>` | all builds |
 | `get_diagnostics` | `{ limit: u16 }` | `DiagnosticEventDto[]` | all builds |
 | `list_states` | — | `CompanionState[]` | all builds |
 | `render_preview_frame` | `{ state: CompanionState, elapsed_ms: u32 }` | `ArrayBuffer` (RGBA8888, 240×240) | **dev-only** |
@@ -91,6 +93,14 @@ interface ConnectionStatusDto {
   } | null;
   incompatibleReason: string | null;      // human-readable when connection === "incompatible"
   retryCount: number;
+  connectionGeneration: number;          // changes whenever device uptime may reset
+  mascotInteraction: boolean;            // negotiated for current connected session
+  mascotAction: {
+    action: "greet" | "pet" | "tickle" | "surprise" | "comfort";
+    personality: "cozy" | "playful" | "calm";
+    seed: number;
+    appliedAtMs: number;                  // original device uptime
+  } | null;
 }
 
 interface DiagnosticEventDto {            // safe-diagnostics allowlist ONLY (ADR-0005)
@@ -132,3 +142,7 @@ Supplying animation selects externally-clocked playback. `update_preview_stream(
 elapsedMs)` coalesces pending requests without recreating the channel. Pause/seek uses the same
 history through `render_preview_frame`. Raw RGBA delivery and acknowledgement remain unchanged.
 Legacy calls without animation still work. These additions do not expose any production device commands.
+
+Mascot timelines also accept `actionEvents: [{ atMs, action, personality, seed }]`. Device Studio
+maps live applied-action acknowledgments into its monotonic preview clock per `connectionGeneration`;
+it retains device uptime as metadata and does not replay the initial status snapshot as a new event.

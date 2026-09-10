@@ -1,11 +1,13 @@
 //! T028 — round-trip encode/decode of every `Message` variant.
 
 use heapless::Vec;
-use kivori_model::{Capabilities, CompanionState, ProtocolVersion, SendableState};
+use kivori_model::{
+    Capabilities, CompanionState, MascotAction, MascotPersonality, ProtocolVersion, SendableState,
+};
 use kivori_protocol::{
     decode_message, encode_message, Bye, ByeReason, Diagnostic, ErrorCategory, ErrorReport,
-    FirmwareVersion, Health, Hello, HelloAck, Message, Ping, Pong, Ready, SetState, StateReport,
-    MAX_FRAME, MAX_WIRE,
+    FirmwareVersion, Health, Hello, HelloAck, MascotActionApplied, Message, Ping, PlayMascotAction,
+    Pong, Ready, SetState, StateReport, MAX_FRAME, MAX_WIRE,
 };
 
 fn roundtrip(msg: &Message) -> Message {
@@ -25,7 +27,7 @@ fn roundtrip(msg: &Message) -> Message {
     decoded
 }
 
-fn all_messages() -> [Message; 11] {
+fn all_messages() -> [Message; 13] {
     let fw = FirmwareVersion {
         major: 1,
         minor: 2,
@@ -74,7 +76,25 @@ fn all_messages() -> [Message; 11] {
             category: ErrorCategory::BadPayload,
             code: 9,
         }),
+        Message::PlayMascotAction(PlayMascotAction {
+            action: MascotAction::Tickle,
+            personality: MascotPersonality::Playful,
+            seed: 42,
+        }),
+        Message::MascotActionApplied(MascotActionApplied {
+            action: MascotAction::Tickle,
+            personality: MascotPersonality::Playful,
+            seed: 42,
+            applied_at_ms: 12_345,
+        }),
     ]
+}
+
+#[test]
+fn mascot_interaction_capability_is_independently_negotiable() {
+    let advertised = Capabilities::MASCOT_INTERACTION.union(Capabilities::from_bits(0b1000));
+    assert!(advertised.contains(Capabilities::MASCOT_INTERACTION));
+    assert!(!Capabilities::NONE.contains(Capabilities::MASCOT_INTERACTION));
 }
 
 #[test]

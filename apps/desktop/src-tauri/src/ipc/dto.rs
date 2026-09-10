@@ -4,8 +4,11 @@
 //! serial handles, or paths. All enum tokens are the lowercase wire strings the frontend expects; the
 //! projections are pure functions of the internal state, so they are unit-testable without Tauri.
 
-use kivori_model::{CompanionState, ConnectionState, ProtocolVersion, SendableState};
-use kivori_protocol::{ErrorCategory, PROTOCOL_MAJOR, PROTOCOL_MINOR};
+use kivori_model::{
+    CompanionState, ConnectionState, MascotAction, MascotPersonality, ProtocolVersion,
+    SendableState,
+};
+use kivori_protocol::{ErrorCategory, MascotActionApplied, PROTOCOL_MAJOR, PROTOCOL_MINOR};
 use serde::Serialize;
 
 use crate::device::fsm::ConnectionManager;
@@ -34,6 +37,26 @@ pub fn companion_token(state: CompanionState) -> &'static str {
         CompanionState::Busy => "busy",
         CompanionState::Sleeping => "sleeping",
         CompanionState::Offline => "offline",
+    }
+}
+
+#[must_use]
+pub fn mascot_action_token(action: MascotAction) -> &'static str {
+    match action {
+        MascotAction::Greet => "greet",
+        MascotAction::Pet => "pet",
+        MascotAction::Tickle => "tickle",
+        MascotAction::Surprise => "surprise",
+        MascotAction::Comfort => "comfort",
+    }
+}
+
+#[must_use]
+pub fn mascot_personality_token(personality: MascotPersonality) -> &'static str {
+    match personality {
+        MascotPersonality::Cozy => "cozy",
+        MascotPersonality::Playful => "playful",
+        MascotPersonality::Calm => "calm",
     }
 }
 
@@ -123,6 +146,22 @@ pub struct ConnectionStatusDto {
     pub incompatible_reason: Option<String>,
     /// Consecutive reconnect attempts.
     pub retry_count: u32,
+    /// Within-process port-session identity. Changes whenever device uptime may reset.
+    pub connection_generation: u32,
+    /// Whether current device session supports transient mascot interactions.
+    pub mascot_interaction: bool,
+    /// Most recent correlated device acknowledgment for a social action in this session.
+    pub mascot_action: Option<MascotActionAppliedDto>,
+}
+
+/// Acknowledged physical action cue, safe to replay in Device Studio.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MascotActionAppliedDto {
+    pub action: String,
+    pub personality: String,
+    pub seed: u32,
+    pub applied_at_ms: u32,
 }
 
 /// A safe diagnostic event (the ADR-0005 allowlist as a wire DTO).
@@ -166,6 +205,9 @@ pub fn connection_status(
     manager: &ConnectionManager,
     orchestrator: &Orchestrator,
     reported: Option<CompanionState>,
+    mascot_interaction: bool,
+    mascot_action: Option<MascotActionApplied>,
+    connection_generation: u32,
 ) -> ConnectionStatusDto {
     let device = manager.device().map(|d| DeviceInfoDto {
         firmware_version: format!(
@@ -182,6 +224,19 @@ pub fn connection_status(
         device,
         incompatible_reason: manager.incompatible_reason().map(str::to_string),
         retry_count: manager.retry_count(),
+        connection_generation,
+        mascot_interaction: manager.state().can_drive_device() && mascot_interaction,
+        mascot_action: mascot_action.map(mascot_action_applied),
+    }
+}
+
+#[must_use]
+pub fn mascot_action_applied(value: MascotActionApplied) -> MascotActionAppliedDto {
+    MascotActionAppliedDto {
+        action: mascot_action_token(value.action).to_string(),
+        personality: mascot_personality_token(value.personality).to_string(),
+        seed: value.seed,
+        applied_at_ms: value.applied_at_ms,
     }
 }
 
@@ -228,8 +283,39 @@ pub fn companion_from_token(token: &str) -> Option<CompanionState> {
     }
 }
 
+/// Parses a lowercase direct social-action token.
+#[must_use]
+pub fn mascot_action_from_token(token: &str) -> Option<MascotAction> {
+    match token {
+        "greet" => Some(MascotAction::Greet),
+        "pet" => Some(MascotAction::Pet),
+        "tickle" => Some(MascotAction::Tickle),
+        "surprise" => Some(MascotAction::Surprise),
+        "comfort" => Some(MascotAction::Comfort),
+        _ => None,
+    }
+}
+
+/// Parses a lowercase mascot-personality token.
+#[must_use]
+pub fn mascot_personality_from_token(token: &str) -> Option<MascotPersonality> {
+    match token {
+        "cozy" => Some(MascotPersonality::Cozy),
+        "playful" => Some(MascotPersonality::Playful),
+        "calm" => Some(MascotPersonality::Calm),
+        _ => None,
+    }
+}
+
 /// The initial (pre-connection) snapshot: `disconnected` / desired `idle`, nothing reported.
 #[must_use]
 pub fn initial_status() -> ConnectionStatusDto {
-    connection_status(&ConnectionManager::new(), &Orchestrator::new(), None)
+    connection_status(
+        &ConnectionManager::new(),
+        &Orchestrator::new(),
+        None,
+        false,
+        None,
+        0,
+    )
 }

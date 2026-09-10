@@ -14,6 +14,8 @@ pub struct Capabilities(u32);
 impl Capabilities {
     /// The empty capability set.
     pub const NONE: Capabilities = Capabilities(0);
+    /// Device accepts deterministic social mascot actions and returns applied-time acknowledgments.
+    pub const MASCOT_INTERACTION: Capabilities = Capabilities(1 << 0);
 
     /// Creates a capability set from a raw bitmask.
     #[must_use]

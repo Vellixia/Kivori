@@ -257,6 +257,44 @@ pub fn compile_default_blob() -> Vec<u8> {
     let mut builder = BlobBuilder::new(DeviceProfile::KIVORI_240);
     let (body_pixels, body_alpha) = compile_layer(source, "body", (28, 48, 184, 160));
     let body = builder.add_masked_bitmap(Size::new(184, 160), 1, &body_pixels, &body_alpha);
+    let eye_names = [
+        "booting",
+        "idle",
+        "happy",
+        "busy",
+        "sleeping",
+        "offline",
+        "affectionate",
+    ];
+    let mouth_names = [
+        "booting", "idle", "happy", "busy", "sleeping", "offline", "laughing",
+    ];
+    let mut eye_pixels = Vec::new();
+    let mut eye_alpha = Vec::new();
+    for name in eye_names {
+        let (pixels, alpha) = compile_layer(source, &format!("eyes-{name}"), (66, 110, 32, 40));
+        eye_pixels.extend_from_slice(&pixels);
+        eye_alpha.extend_from_slice(&alpha);
+    }
+    let eyes = builder.add_masked_bitmap(
+        Size::new(32, 40),
+        eye_names.len() as u16,
+        &eye_pixels,
+        &eye_alpha,
+    );
+    let mut mouth_pixels = Vec::new();
+    let mut mouth_alpha = Vec::new();
+    for name in mouth_names {
+        let (pixels, alpha) = compile_layer(source, &format!("mouth-{name}"), (96, 146, 48, 24));
+        mouth_pixels.extend_from_slice(&pixels);
+        mouth_alpha.extend_from_slice(&alpha);
+    }
+    let mouth = builder.add_masked_bitmap(
+        Size::new(48, 24),
+        mouth_names.len() as u16,
+        &mouth_pixels,
+        &mouth_alpha,
+    );
     let states = [
         (CompanionState::Booting, "booting"),
         (CompanionState::Idle, "idle"),
@@ -265,11 +303,7 @@ pub fn compile_default_blob() -> Vec<u8> {
         (CompanionState::Sleeping, "sleeping"),
         (CompanionState::Offline, "offline"),
     ];
-    for (state, name) in states {
-        let (ep, ea) = compile_layer(source, &format!("eyes-{name}"), (66, 110, 32, 40));
-        let (mp, ma) = compile_layer(source, &format!("mouth-{name}"), (96, 146, 48, 24));
-        let eyes = builder.add_masked_bitmap(Size::new(32, 40), 1, &ep, &ea);
-        let mouth = builder.add_masked_bitmap(Size::new(48, 24), 1, &mp, &ma);
+    for (state, _name) in states {
         builder.add_mascot_scene(state, body, eyes, mouth);
     }
     let blob = builder.finish();

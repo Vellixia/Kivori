@@ -27,6 +27,9 @@ export function mockConnectionStatus(): ConnectionStatusDto {
     device: null,
     incompatibleReason: null,
     retryCount: 0,
+    connectionGeneration: 0,
+    mascotInteraction: false,
+    mascotAction: null,
   };
 }
 

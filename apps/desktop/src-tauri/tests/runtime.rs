@@ -12,7 +12,10 @@ use kivori_desktop::diagnostics::{DiagnosticsLog, SafeDiagnostic};
 use kivori_desktop::ipc::dto;
 use kivori_desktop::orchestrator::Orchestrator;
 use kivori_desktop::runtime::state::{AppState, DeviceCommand};
-use kivori_model::{CompanionState, ConnectionState, ProtocolVersion, SendableState};
+use kivori_model::{
+    CompanionState, ConnectionState, MascotAction, MascotPersonality, ProtocolVersion,
+    SendableState,
+};
 use kivori_protocol::{ErrorCategory, FirmwareVersion};
 
 fn connected_device() -> ConnectedDevice {
@@ -35,6 +38,7 @@ fn initial_status_is_disconnected_idle() {
     assert_eq!(dto.reported, None);
     assert!(dto.device.is_none());
     assert_eq!(dto.retry_count, 0);
+    assert!(!dto.mascot_interaction);
 }
 
 #[test]
@@ -45,10 +49,19 @@ fn connected_status_projects_all_three_axes() {
     let mut orchestrator = Orchestrator::new();
     orchestrator.set_desired(SendableState::Busy);
 
-    let dto = dto::connection_status(&manager, &orchestrator, Some(CompanionState::Happy));
+    let dto = dto::connection_status(
+        &manager,
+        &orchestrator,
+        Some(CompanionState::Happy),
+        true,
+        None,
+        7,
+    );
     assert_eq!(dto.connection, "connected");
     assert_eq!(dto.desired, "busy");
     assert_eq!(dto.reported.as_deref(), Some("happy"));
+    assert!(dto.mascot_interaction);
+    assert_eq!(dto.connection_generation, 7);
     let device = dto.device.expect("device present when connected");
     assert_eq!(device.firmware_version, "1.4.2");
     assert_eq!(device.device_id_hash_short, "deadbeef");
@@ -60,7 +73,7 @@ fn incompatible_status_carries_reason() {
     let mut manager = ConnectionManager::new();
     manager.apply(ManagerEvent::PortOpened);
     manager.apply(ManagerEvent::HandshakeIncompatible { device_major: 2 });
-    let dto = dto::connection_status(&manager, &Orchestrator::new(), None);
+    let dto = dto::connection_status(&manager, &Orchestrator::new(), None, false, None, 1);
     assert_eq!(dto.connection, "incompatible");
     assert!(dto.incompatible_reason.unwrap().contains("v2"));
     assert!(dto.device.is_none());
@@ -93,6 +106,16 @@ fn sendable_boundary_rejects_device_originated_and_unknown() {
         Some(CompanionState::Offline)
     );
     assert_eq!(dto::companion_from_token("nope"), None);
+    assert_eq!(
+        dto::mascot_action_from_token("tickle"),
+        Some(MascotAction::Tickle)
+    );
+    assert_eq!(dto::mascot_action_from_token("unknown"), None);
+    assert_eq!(
+        dto::mascot_personality_from_token("calm"),
+        Some(MascotPersonality::Calm)
+    );
+    assert_eq!(dto::mascot_personality_from_token("unknown"), None);
 }
 
 #[test]

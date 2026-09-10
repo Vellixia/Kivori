@@ -27,8 +27,8 @@ pub use color::Rgb565;
 pub use connection::{ConnectionEvent, ConnectionState};
 pub use geometry::{Point, Rect, Size};
 pub use mascot::{
-    MascotAnimator, MascotPose, MASCOT_ANCHOR, MASCOT_SLEEP_TRANSITION_MS, MASCOT_TRANSITION_MS,
-    SCALE_Q8_ONE,
+    MascotAction, MascotAnimator, MascotExpression, MascotPersonality, MascotPose, MASCOT_ANCHOR,
+    MASCOT_SLEEP_TRANSITION_MS, MASCOT_TRANSITION_MS, SCALE_Q8_ONE,
 };
 pub use profile::{ColorFormat, DeviceProfile, PanelController, ProfileError, TileConfig};
 pub use scene::{

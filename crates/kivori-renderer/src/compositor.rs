@@ -9,8 +9,8 @@ use embedded_graphics::text::Text;
 use kivori_assets::{AssetBlob, LayerDef, SceneDef};
 use kivori_framebuffer::TileBand;
 use kivori_model::{
-    resolve_transform, CompanionState, ElapsedMs, FontId, LayerKind, LayerRole, MascotAnimator,
-    MascotPose, Rgb565, MASCOT_ANCHOR, SCALE_Q8_ONE,
+    resolve_transform, ElapsedMs, FontId, LayerKind, LayerRole, MascotAnimator, MascotPose, Rgb565,
+    MASCOT_ANCHOR, SCALE_Q8_ONE,
 };
 
 /// Error compositing a scene: a layer referenced an asset/string/frame that was missing or malformed.
@@ -138,8 +138,17 @@ fn body_transform(pose: &MascotPose) -> DrawTransform {
 fn face_transform(layer: &LayerDef, role: LayerRole, pose: &MascotPose) -> DrawTransform {
     let mut transform = body_transform(pose);
     if role == LayerRole::Eyes {
-        transform.scale_y_q8 = ((u32::from(transform.scale_y_q8) * u32::from(pose.eyes_scale_y_q8))
+        let individual_scale = if layer.origin.x < MASCOT_ANCHOR.x {
+            pose.left_eye_scale_y_q8
+        } else {
+            pose.right_eye_scale_y_q8
+        };
+        transform.scale_y_q8 = ((u32::from(transform.scale_y_q8) * u32::from(pose.eyes_scale_y_q8)
+            / u32::from(SCALE_Q8_ONE))
+            * u32::from(individual_scale)
             / u32::from(SCALE_Q8_ONE)) as u16;
+        transform.offset_q8.0 += pose.eye_offset_q8.0;
+        transform.offset_q8.1 += pose.eye_offset_q8.1;
         if let LayerKind::Sprite { frame_size, .. } = layer.kind {
             let crop_centre_y = i32::from(layer.origin.y) + i32::from(frame_size.h) / 2;
             transform.offset_q8.1 += (crop_centre_y - i32::from(MASCOT_ANCHOR.y))
@@ -220,83 +229,26 @@ fn render_face_layer(
     let LayerKind::Sprite { frame_size, .. } = selected_layer.kind else {
         return Err(RenderError::IncompatibleFaceLayer);
     };
-    let transform = face_transform(selected_layer, role, pose);
-    if transform.scale_x_q8 == 0 || transform.scale_y_q8 == 0 {
-        return Ok(());
+    if selected_layer.role != role {
+        return Err(RenderError::IncompatibleFaceLayer);
     }
-    let bounds = clip_bounds(
-        sprite_bounds(
-            selected_layer.origin.x,
-            selected_layer.origin.y,
-            frame_size,
-            transform,
-        ),
+    let LayerKind::Sprite { asset, .. } = selected_layer.kind else {
+        return Err(RenderError::IncompatibleFaceLayer);
+    };
+    let frame = match role {
+        LayerRole::Eyes => pose.expression.eye_frame(),
+        LayerRole::Mouth => pose.expression.mouth_frame(),
+        LayerRole::Static | LayerRole::Body => return Err(RenderError::IncompatibleFaceLayer),
+    };
+    draw_sprite(
+        blob,
+        asset,
+        frame_size,
+        frame,
+        (selected_layer.origin.x, selected_layer.origin.y),
+        face_transform(selected_layer, role, pose),
         band,
-    );
-    let mut y = bounds.1;
-    while y < bounds.3 {
-        let mut x = bounds.0;
-        while x < bounds.2 {
-            if let Some((sx, sy)) = source_at(
-                x,
-                y,
-                selected_layer.origin.x,
-                selected_layer.origin.y,
-                frame_size,
-                transform,
-            ) {
-                let mut total_alpha = 0u32;
-                let mut red = 0u32;
-                let mut green = 0u32;
-                let mut blue = 0u32;
-                for state in CompanionState::ALL {
-                    let weight = u32::from(pose.state_weights[state.index()]);
-                    if weight == 0 {
-                        continue;
-                    }
-                    let other = blob
-                        .scene(state)
-                        .ok_or(RenderError::IncompatibleFaceLayer)?;
-                    let layer = other
-                        .layers
-                        .get(ordinal)
-                        .ok_or(RenderError::IncompatibleFaceLayer)?;
-                    let LayerKind::Sprite {
-                        frame_size: other_size,
-                        ..
-                    } = layer.kind
-                    else {
-                        return Err(RenderError::IncompatibleFaceLayer);
-                    };
-                    if layer.role != role
-                        || layer.origin != selected_layer.origin
-                        || other_size != frame_size
-                    {
-                        return Err(RenderError::IncompatibleFaceLayer);
-                    }
-                    let (color, alpha) = sprite_sample(blob, layer, sx, sy)?;
-                    let contribution = weight * u32::from(alpha);
-                    total_alpha += contribution;
-                    let (r, g, b) = color.to_rgb888();
-                    red += u32::from(r) * contribution;
-                    green += u32::from(g) * contribution;
-                    blue += u32::from(b) * contribution;
-                }
-                if let Some(red) = red.checked_div(total_alpha) {
-                    let color = Rgb565::from_rgb888(
-                        red as u8,
-                        (green / total_alpha) as u8,
-                        (blue / total_alpha) as u8,
-                    );
-                    let alpha = ((total_alpha + 127) / 255).min(15) as u8;
-                    composite_pixel(band, x, y, color, alpha, transform.opacity);
-                }
-            }
-            x += 1;
-        }
-        y += 1;
-    }
-    Ok(())
+    )
 }
 
 fn draw_sprite(
@@ -331,19 +283,6 @@ fn draw_sprite(
         y += 1;
     }
     Ok(())
-}
-
-fn sprite_sample(
-    blob: &AssetBlob,
-    layer: &LayerDef,
-    sx: u16,
-    sy: u16,
-) -> Result<(Rgb565, u8), RenderError> {
-    let LayerKind::Sprite { asset, frame_size } = layer.kind else {
-        return Err(RenderError::IncompatibleFaceLayer);
-    };
-    let entry = blob.bitmap(asset).ok_or(RenderError::MissingBitmap)?;
-    bitmap_sample(blob, entry, frame_size, 0, sx, sy)
 }
 
 fn bitmap_sample(
@@ -491,7 +430,7 @@ fn composite_pixel(band: &mut TileBand, x: i32, y: i32, source: Rgb565, alpha4: 
 mod tests {
     use super::*;
     use heapless::Vec;
-    use kivori_model::{Keyframe, Point, Size};
+    use kivori_model::{CompanionState, Keyframe, Point, Size};
 
     fn eyes_layer() -> LayerDef {
         LayerDef {

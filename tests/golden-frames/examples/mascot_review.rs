@@ -32,7 +32,9 @@ fn main() {
         let source = fs::read(format!("assets/scenes/{name}.svg")).unwrap();
         let old = kivori_asset_compiler::rasterize::svg_to_rgb565(&source, 240, 240).unwrap();
         let old_pixels: Vec<_> = old
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| Rgb565::from_raw(u16::from_le_bytes([p[0], p[1]])))
             .collect();
         ppm(&directory.join(format!("before-{name}.ppm")), &old_pixels);
@@ -44,6 +46,19 @@ fn main() {
             println!("{name}=0x{:016X}", frame_hash(&pixels));
             ppm(&directory.join(format!("{name}.ppm")), &pixels);
         }
+    }
+    for ms in [20_877, 21_227, 21_377, 21_457, 22_277] {
+        let mut pixels = vec![Rgb565::from_raw(0); 240 * 240];
+        let mut band = TileBand::new(Rect::new(0, 0, 240, 240), &mut pixels).unwrap();
+        render_scene(
+            &blob,
+            blob.scene(CompanionState::Idle).unwrap(),
+            ms,
+            &mut band,
+        )
+        .unwrap();
+        println!("idle-life-{ms}=0x{:016X}", frame_hash(&pixels));
+        ppm(&directory.join(format!("idle-life-{ms}.ppm")), &pixels);
     }
     let mut animator = MascotAnimator::new(CompanionState::Idle, 0);
     animator.set_state(CompanionState::Happy, 100);

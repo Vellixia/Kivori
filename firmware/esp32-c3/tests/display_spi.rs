@@ -414,7 +414,7 @@ fn an_idle_blink_transfers_less_than_one_third_of_a_frame() {
         .render_animation(
             &blob,
             CompanionState::Idle,
-            &animator.pose_at(3_600),
+            &animator.pose_at(2_911),
             &mut sink,
         )
         .expect("blink frame");

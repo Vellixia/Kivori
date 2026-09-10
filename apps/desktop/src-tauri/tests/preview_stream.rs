@@ -20,6 +20,7 @@ fn live_updates_keep_only_the_latest_timestamp() {
             AnimationTimeline {
                 initial_state: "idle".into(),
                 events: vec![],
+                action_events: vec![],
             },
             ms,
         );
@@ -30,6 +31,7 @@ fn live_updates_keep_only_the_latest_timestamp() {
         AnimationTimeline {
             initial_state: "idle".into(),
             events: vec![],
+            action_events: vec![],
         },
         133,
     );
@@ -39,6 +41,7 @@ fn live_updates_keep_only_the_latest_timestamp() {
         AnimationTimeline {
             initial_state: "idle".into(),
             events: vec![],
+            action_events: vec![],
         },
         166,
     );

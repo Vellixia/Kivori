@@ -81,6 +81,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Message::Hello(_) => "Hello",
                             Message::Ready(_) => "Ready",
                             Message::SetState(_) => "SetState",
+                            Message::PlayMascotAction(_) => "PlayMascotAction",
+                            Message::MascotActionApplied(_) => "MascotActionApplied",
                         }
                     ),
                     Err(_) if !packet.is_empty() => invalid += 1,

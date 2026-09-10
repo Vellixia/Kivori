@@ -13,11 +13,11 @@ const DIM: u16 = 240;
 
 // Committed golden frame-hashes (FNV-1a over RGB565 LE bytes); see manifest.toml.
 const H_BOOTING: u64 = 0xC2C4_E9FF_E653_52DE;
-const H_IDLE: u64 = 0xC939_3FBB_BE80_50BC;
+const H_IDLE: u64 = 0x41FB_3136_4783_1A60;
 const H_HAPPY: u64 = 0x934B_4C31_7C16_04B6;
 const H_BUSY: u64 = 0x7B25_0F89_E9EB_9001;
-const H_SLEEPING: u64 = 0x3EA7_9ECC_4864_18A4;
-const H_OFFLINE: u64 = 0x520E_0C2B_C013_788A;
+const H_SLEEPING: u64 = 0x345F_00A5_DDAD_5F0A;
+const H_OFFLINE: u64 = 0xDC39_4A1B_1CF0_7365;
 
 fn render_state_hash(state: CompanionState) -> u64 {
     let blob = compile_default_blob();
@@ -63,11 +63,11 @@ fn motion_and_interrupted_transitions_match_reviewed_pixels() {
     animator.set_state(CompanionState::Happy, 100);
     animator.set_state(CompanionState::Sleeping, 250);
     for (ms, expected) in [
-        (250, 0x4AEDD9C58E11139D),
-        (400, 0xF637D5A0852B4B15),
-        (600, 0xB3A3CD8859F2ECBE),
-        (849, 0xA69EDF2A1101A0C2),
-        (850, 0x658A82EFCB8BC423),
+        (250, 0x3ECC6E8343FE274D),
+        (400, 0x9293D5B9CB1BC19D),
+        (600, 0xEEF7C6CB5B888488),
+        (849, 0x345F00A5DDAD5F0A),
+        (850, 0x345F00A5DDAD5F0A),
     ] {
         let mut pixels = vec![Rgb565::from_raw(0); 240 * 240];
         let mut band = TileBand::new(Rect::new(0, 0, 240, 240), &mut pixels).unwrap();
@@ -86,7 +86,11 @@ fn motion_and_interrupted_transitions_match_reviewed_pixels() {
     }
     for (state, ms, expected) in [
         (CompanionState::Idle, 600, 0x41FB313647831A60),
-        (CompanionState::Idle, 3600, 0x05A05B04B2C5FA93),
+        (CompanionState::Idle, 3600, 0x41FB313647831A60),
+        (CompanionState::Idle, 21227, 0x2BA05471A84D58BE),
+        (CompanionState::Idle, 21377, 0x80E8CDE332002649),
+        (CompanionState::Idle, 21457, 0x9279C6F37D369390),
+        (CompanionState::Idle, 22277, 0xDC419C1632A3A447),
         (CompanionState::Happy, 300, 0xB8899A8FC6194A46),
         (CompanionState::Sleeping, 1200, 0x345F00A5DDAD5F0A),
     ] {
@@ -95,4 +99,32 @@ fn motion_and_interrupted_transitions_match_reviewed_pixels() {
         render_scene(&blob, blob.scene(state).unwrap(), ms, &mut band).unwrap();
         assert_eq!(frame_hash(&pixels), expected, "{state:?} at {ms}");
     }
+}
+
+#[test]
+fn social_reactions_render_distinct_faces_from_the_same_semantic_state() {
+    use kivori_model::{MascotExpression, MascotPose};
+
+    let bytes = compile_default_blob();
+    let blob = AssetBlob::parse(&bytes).unwrap();
+    let scene = blob.scene(CompanionState::Idle).unwrap();
+    let render = |pose| {
+        let mut pixels = vec![Rgb565::from_raw(0); 240 * 240];
+        let mut band = TileBand::new(Rect::new(0, 0, 240, 240), &mut pixels).unwrap();
+        kivori_renderer::render_pose(&blob, scene, &pose, &mut band).unwrap();
+        frame_hash(&pixels)
+    };
+
+    let idle_pose = MascotPose::for_state(CompanionState::Idle);
+    let idle = render(idle_pose);
+    let mut affectionate_pose = idle_pose;
+    affectionate_pose.expression = MascotExpression::Affectionate;
+    let affectionate = render(affectionate_pose);
+    let mut surprised_pose = idle_pose;
+    surprised_pose.expression = MascotExpression::Surprised;
+    let surprised = render(surprised_pose);
+
+    assert_ne!(affectionate, idle);
+    assert_ne!(surprised, idle);
+    assert_ne!(surprised, affectionate);
 }

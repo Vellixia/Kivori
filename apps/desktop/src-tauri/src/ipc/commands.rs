@@ -49,6 +49,48 @@ pub fn set_desired_state(app: State<'_, AppState>, state: String) -> Result<(), 
     app.send_command(DeviceCommand::SetDesired(desired))
 }
 
+/// Updates desktop-owned companion personality and autonomous-play preference.
+///
+/// # Errors
+/// Returns an error for an unknown personality token or stopped device runtime.
+#[tauri::command]
+pub fn configure_companion(
+    app: State<'_, AppState>,
+    personality: String,
+    self_play: bool,
+) -> Result<(), String> {
+    let personality = dto::mascot_personality_from_token(&personality)
+        .ok_or_else(|| format!("unknown mascot personality: {personality}"))?;
+    app.send_command(DeviceCommand::ConfigureCompanion {
+        personality,
+        self_play,
+    })
+}
+
+/// Requests one immediate social reaction from a compatible connected device.
+///
+/// # Errors
+/// Returns an error for an unknown action, unavailable runtime, disconnected device, old firmware,
+/// or active firmware update.
+#[tauri::command]
+pub fn play_mascot_action(app: State<'_, AppState>, action: String) -> Result<(), String> {
+    if app.firmware_busy() {
+        return Err(
+            "Firmware update is in progress; wait for the device to reconnect.".to_string(),
+        );
+    }
+    let action = dto::mascot_action_from_token(&action)
+        .ok_or_else(|| format!("unknown mascot action: {action}"))?;
+    let status = app.status_snapshot();
+    if status.connection != "connected" {
+        return Err("Connect Kivori before playing a reaction.".to_string());
+    }
+    if !status.mascot_interaction {
+        return Err("Update Kivori firmware to enable mascot interactions.".to_string());
+    }
+    app.send_command(DeviceCommand::PlayMascotAction(action))
+}
+
 /// The fixed bundled firmware image and the native update workflow's safe status.
 #[tauri::command]
 pub fn get_firmware_status(app: State<'_, AppState>) -> FirmwareStatus {

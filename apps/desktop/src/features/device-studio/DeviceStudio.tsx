@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { DevicePreview } from '../../lib/canvas/DevicePreview';
-import { openPreviewStream, type PreviewStream } from '../../lib/ipc';
+import { onConnectionStatus, openPreviewStream, type PreviewStream } from '../../lib/ipc';
 import { PREVIEW_FPS } from '../../lib/ipc/types';
-import type { AnimationTimeline } from '../../lib/ipc/types';
+import type { AnimationTimeline, ConnectionStatusDto } from '../../lib/ipc/types';
 import { strings } from '../../lib/i18n/strings';
 import { Controls } from './Controls';
 import { useStudioStore } from './store';
@@ -21,13 +21,32 @@ export function DeviceStudio(): ReactElement {
   const elapsedMs = useStudioStore((s) => s.elapsedMs);
   const playing = useStudioStore((s) => s.playing);
   const events = useStudioStore((s) => s.events);
-  const animation = useMemo<AnimationTimeline>(() => ({ initialState: 'idle', events }), [events]);
+  const actionEvents = useStudioStore((s) => s.actionEvents);
+  const animation = useMemo<AnimationTimeline>(
+    () => ({ initialState: 'idle', events, actionEvents }),
+    [events, actionEvents],
+  );
   const advance = useStudioStore((s) => s.advance);
+  const recordAppliedAction = useStudioStore((s) => s.recordAppliedAction);
   const rafRef = useRef<number | null>(null);
   const [streamFrame, setStreamFrame] = useState<Uint8ClampedArray | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
   const requestRef = useRef({ state, animation, elapsedMs });
   requestRef.current = { state, animation, elapsedMs };
+
+  useEffect(() => {
+    const apply = (status: ConnectionStatusDto): void => {
+      if (status.connection !== 'connected') return;
+      const applied = status.mascotAction;
+      if (!applied) return;
+      recordAppliedAction(applied, status.connectionGeneration);
+    };
+    let unlisten = (): void => {};
+    void onConnectionStatus(apply).then((stop) => {
+      unlisten = stop;
+    });
+    return () => unlisten();
+  }, [recordAppliedAction]);
 
   // Advance the timeline while playing (drift-free integer stepping lives in the store).
   useEffect(() => {

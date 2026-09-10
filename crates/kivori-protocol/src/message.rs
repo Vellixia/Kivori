@@ -2,7 +2,7 @@
 //! the `postcard` variant index is the wire tag.
 
 use crate::error::{ByeReason, ErrorCategory};
-use kivori_model::{Capabilities, CompanionState, SendableState};
+use kivori_model::{Capabilities, CompanionState, MascotAction, MascotPersonality, SendableState};
 use serde::{Deserialize, Serialize};
 
 /// A handshake nonce the device must echo to prove liveness/identity.
@@ -121,6 +121,30 @@ pub struct ErrorReport {
     pub code: u16,
 }
 
+/// `PlayMascotAction` — desktop → device: start one transient social reaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlayMascotAction {
+    /// Social action to perform.
+    pub action: MascotAction,
+    /// Personality shaping reaction motion strength.
+    pub personality: MascotPersonality,
+    /// Explicit seed keeping any variation deterministic across preview and hardware.
+    pub seed: u32,
+}
+
+/// `MascotActionApplied` — device → desktop: confirms when a reaction entered its timeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MascotActionApplied {
+    /// Social action accepted by the device.
+    pub action: MascotAction,
+    /// Personality accepted by the device, matching the originating cue.
+    pub personality: MascotPersonality,
+    /// Deterministic cue seed, used to correlate an acknowledgment with one action.
+    pub seed: u32,
+    /// Device uptime at application, in milliseconds.
+    pub applied_at_ms: u32,
+}
+
 /// The top-level wire message.
 ///
 /// **Append-only**: new variants are added at the end within a major version — the `postcard`
@@ -149,4 +173,8 @@ pub enum Message {
     Diagnostic(Diagnostic),
     /// Either side: a categorized protocol error.
     Error(ErrorReport),
+    /// Desktop requests a transient social reaction.
+    PlayMascotAction(PlayMascotAction),
+    /// Device confirms the reaction's canonical start time.
+    MascotActionApplied(MascotActionApplied),
 }

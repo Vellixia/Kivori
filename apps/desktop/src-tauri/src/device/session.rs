@@ -12,11 +12,14 @@ use crate::device::fsm::{ConnectionManager, ManagerEvent};
 use crate::device::heartbeat::HeartbeatMonitor;
 use crate::device::transport::SerialLink;
 use crate::orchestrator::Orchestrator;
-use kivori_model::{Capabilities, CompanionState, ProtocolVersion, SendableState};
+use kivori_model::{
+    Capabilities, CompanionState, MascotAction, MascotPersonality, ProtocolVersion, SendableState,
+};
 use kivori_protocol::{
     decode_frame, decode_message, encode_message, evaluate_hello_ack, Bye, ByeReason,
-    FirmwareVersion, HandshakeOutcome, Hello, Message, Ping, ProtoError, SeqClass, SequenceTracker,
-    SetState, MAX_FRAME, MAX_WIRE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
+    FirmwareVersion, HandshakeOutcome, Hello, MascotActionApplied, Message, Ping, PlayMascotAction,
+    ProtoError, SeqClass, SequenceTracker, SetState, MAX_FRAME, MAX_WIRE, PROTOCOL_MAJOR,
+    PROTOCOL_MINOR,
 };
 
 /// Static session parameters (the desktop's advertised identity + compatibility).
@@ -41,7 +44,7 @@ impl Default for SessionConfig {
                 patch: 0,
             },
             protocol_version: ProtocolVersion::new(PROTOCOL_MAJOR, PROTOCOL_MINOR),
-            capabilities: Capabilities::NONE,
+            capabilities: Capabilities::MASCOT_INTERACTION,
             supported_majors: vec![PROTOCOL_MAJOR],
         }
     }
@@ -65,6 +68,9 @@ pub struct Session {
     next_nonce: u32,
     heartbeat: HeartbeatMonitor,
     reported: Option<CompanionState>,
+    negotiated_caps: Capabilities,
+    last_mascot_action_applied: Option<MascotActionApplied>,
+    connection_generation: u32,
 }
 
 impl Session {
@@ -80,6 +86,9 @@ impl Session {
             next_nonce: 1,
             heartbeat: HeartbeatMonitor::default(),
             reported: None,
+            negotiated_caps: Capabilities::NONE,
+            last_mascot_action_applied: None,
+            connection_generation: 0,
         }
     }
 
@@ -93,10 +102,13 @@ impl Session {
         manager: &mut ConnectionManager,
     ) -> Result<(), SessionError<L::Error>> {
         manager.apply(ManagerEvent::PortOpened);
+        self.connection_generation = self.connection_generation.wrapping_add(1).max(1);
         self.rx.clear();
         self.inbound = SequenceTracker::new();
         self.heartbeat = HeartbeatMonitor::default();
         self.reported = None;
+        self.negotiated_caps = Capabilities::NONE;
+        self.last_mascot_action_applied = None;
         let nonce = self.next_nonce;
         self.next_nonce = self.next_nonce.wrapping_add(1);
         let hello = build_hello(self.config.app_version, self.config.capabilities, nonce);
@@ -108,6 +120,25 @@ impl Session {
     #[must_use]
     pub fn reported(&self) -> Option<CompanionState> {
         self.reported
+    }
+
+    /// Whether both peers negotiated transient mascot interactions for this connection.
+    #[must_use]
+    pub fn supports_mascot_interaction(&self) -> bool {
+        self.negotiated_caps
+            .contains(Capabilities::MASCOT_INTERACTION)
+    }
+
+    /// Most recent device acknowledgment for a social action in this connection.
+    #[must_use]
+    pub const fn last_mascot_action_applied(&self) -> Option<MascotActionApplied> {
+        self.last_mascot_action_applied
+    }
+
+    /// Monotonic identity for the current within-process port session.
+    #[must_use]
+    pub const fn connection_generation(&self) -> u32 {
+        self.connection_generation
     }
 
     /// Reads and handles all currently-available inbound frames, driving `manager`/`orchestrator` and
@@ -148,6 +179,31 @@ impl Session {
             self.transmit_set_state(link, state)?;
         }
         Ok(())
+    }
+
+    /// Sends one transient social reaction when the connection negotiated support.
+    ///
+    /// Returns `Ok(false)` without writing when disconnected or paired with older firmware.
+    pub fn play_mascot_action<L: SerialLink>(
+        &mut self,
+        link: &mut L,
+        manager: &ConnectionManager,
+        action: MascotAction,
+        personality: MascotPersonality,
+        seed: u32,
+    ) -> Result<bool, SessionError<L::Error>> {
+        if !manager.state().can_drive_device() || !self.supports_mascot_interaction() {
+            return Ok(false);
+        }
+        self.send(
+            link,
+            &Message::PlayMascotAction(PlayMascotAction {
+                action,
+                personality,
+                seed,
+            }),
+        )?;
+        Ok(true)
     }
 
     /// Sends a heartbeat `Ping` and records it as pending (see [`Session::heartbeat_timed_out`]).
@@ -229,6 +285,7 @@ impl Session {
                 ) {
                     HandshakeOutcome::Compatible(ready) => {
                         manager.apply(ManagerEvent::HandshakeOk(summarize(&ack, device_version)));
+                        self.negotiated_caps = ready.negotiated_caps;
                         self.send(link, &Message::Ready(ready))?;
                         // Resynchronize the device to our desired state on (re)connect (FR-009).
                         let desired = orchestrator.resync_state();
@@ -252,6 +309,9 @@ impl Session {
             }
             Message::Pong(_) => self.heartbeat.on_pong(),
             Message::StateReport(report) => self.reported = Some(report.reported),
+            Message::MascotActionApplied(applied) => {
+                self.last_mascot_action_applied = Some(applied);
+            }
             // `Ready` and the remaining device→desktop kinds are observed by the UI layer, not here.
             _ => {}
         }

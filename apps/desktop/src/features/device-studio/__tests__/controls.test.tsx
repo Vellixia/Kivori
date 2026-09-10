@@ -46,6 +46,14 @@ describe('Device Studio Controls', () => {
     expect(useStudioStore.getState().state).toBe('happy');
   });
 
+  it('records a social reaction cue for native preview replay', async () => {
+    const user = userEvent.setup();
+    render(<Controls />);
+    await user.click(screen.getByRole('button', { name: 'Tickle' }));
+    expect(useStudioStore.getState().actionEvents).toHaveLength(1);
+    expect(useStudioStore.getState().actionEvents[0]?.action).toBe('tickle');
+  });
+
   it('play toggles playback', async () => {
     const user = userEvent.setup();
     render(<Controls />);

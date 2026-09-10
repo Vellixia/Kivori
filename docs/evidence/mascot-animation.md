@@ -15,8 +15,12 @@ After (canonical RGB565 renderer output at 600 ms):
 
 ![Layered mascot states](mascot-states.png)
 
-Goldens cover all six states at time zero, state-loop/blink samples, and an idle → happy
-transition interrupted by sleeping at 250 ms. Regenerate the review exports with:
+The review export also produces `idle-life.png`, a five-frame strip showing gaze anticipation,
+closed-eye expression swap, delighted hold, and closed-eye recovery with an unchanged body silhouette.
+
+Goldens cover all six states at time zero, seeded idle gaze/expression samples, state-loop/blink
+samples, and an idle → happy transition interrupted by sleeping at 250 ms. Regenerate the review
+exports with:
 
 ```powershell
 cargo run -p kivori-golden-frames --example mascot_review
@@ -30,10 +34,10 @@ The original placeholder SVGs remain as before evidence and are no longer built 
 
 | Item | Result | Limit |
 | --- | ---: | ---: |
-| Complete compiled mascot blob | 110,693 bytes (108.1 KiB) | 131,072 bytes |
+| Complete compiled mascot blob | 116,634 bytes (113.9 KiB) | 131,072 bytes |
 | Previous placeholder pixel pool alone | 691,200 bytes (675 KiB) | — |
-| Animation controller | 32 bytes | 8 KiB additional animation working memory |
-| Resolved pose | 20 bytes | Included in animation working memory |
+| Animation controller | 92 bytes | 8 KiB additional animation working memory |
+| Resolved pose | 32 bytes | Included in animation working memory |
 | Device tile renderer | At most 4,096 bytes (compile-time enforced) | No second framebuffer |
 | Physical-mode frame staging | 115,200 bytes (112.5 KiB), static SRAM | One complete prepared frame |
 | Physical SPI buffers | 4,096-byte DMA TX + 4,096-byte encoding batch | No runtime allocation |
@@ -80,11 +84,11 @@ Restart preview clears the session history. The browser mock does not show the n
 
 ## Automated checks (2026-09-08)
 
-- `cargo test --workspace`: 182 tests passed, including asset goldens, compositor tests and native preview tests.
+- `cargo test --workspace`: 204 tests passed, including ACK clock mapping, asset goldens, compositor tests and native preview tests.
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed.
-- Firmware host simulation: passed, including runtime event/report behavior and tile/frame parity.
+- Firmware host simulation: 36 tests passed, including runtime event/report behavior, local blink transfer and tile/frame parity.
 - Physical ST7789 release firmware build: passed; one pre-existing unused doc-comment warning.
-- Frontend tests, typecheck and production build: passed. ESLint has 28 pre-existing UI-component
+- Frontend tests (48), typecheck and production build: passed. ESLint has 28 pre-existing UI-component
   return-type warnings and no errors. Production mock exclusion passed.
 - Native Kivori window launched and reported responsive. Desktop automation was unavailable, so
   live window interactions were not automatically verified.
