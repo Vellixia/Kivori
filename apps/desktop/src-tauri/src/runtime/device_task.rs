@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use tauri::AppHandle;
 
-use crate::activity::{ActivityEventKind, ActivityLog, ActivityMetadata};
+use crate::activity::{ActivityEventKind, ActivityLog, ActivityMetadata, RuntimeActivityPlanner};
 use crate::companion::CompanionDirector;
 use crate::device::discovery::DEFAULT_ALLOWLIST;
 use crate::device::fsm::{ConnectionManager, ManagerEvent};
@@ -156,6 +156,7 @@ fn device_loop(
     *status.lock().expect("status lock") = last.clone();
     events::emit_status(&app, &last);
     let mut previous_state = manager.state();
+    let activity_planner = RuntimeActivityPlanner::new();
     let mut recovering = false;
     record(&app, &activity_log, &manager, started);
 
@@ -375,7 +376,8 @@ fn device_loop(
                         _ => first_candidate(DEFAULT_ALLOWLIST),
                     };
                     if let Some(name) = candidate {
-                        record_kind(&app, &activity_log, ActivityEventKind::ConnectionAttempted);
+                        let attempt = activity_planner.attempt();
+                        record_with_metadata(&app, &activity_log, attempt.kind, attempt.metadata);
                         if let Ok(mut opened) = SerialPortLink::open(&name) {
                             if session.open(&mut opened, &mut manager).is_ok() {
                                 link = Some(opened);
