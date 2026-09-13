@@ -7,8 +7,8 @@
 ## Context
 
 The Kivori desktop core speaks a binary serial protocol to a physical device and surfaces typed session
-activity to the user and local logs. Its raw material — payload bytes, opaque device identity, OS paths,
-usernames, and tool output — is sensitive and must never leak into a webview or log file.
+activity in the webview. Its raw material — payload bytes, opaque device identity, OS paths, usernames,
+and tool output — is sensitive and must never leak into the activity view or ordinary process logs.
 
 ## Decision
 

@@ -59,7 +59,7 @@ interface FirmwareStatusDto {
 | `connection://status`  | `ConnectionStatusDto` | any change to connection/desired/reported      |
 | `activity-log://event` | `ActivityEventDto`    | a new typed session activity event is recorded |
 
-Events carry small JSON DTOs (status/diagnostics) — never frame bytes (large binary uses `Channel`,
+Events carry small JSON DTOs (status/activity) — never frame bytes (large binary uses `Channel`,
 [research §R-7](../research.md#r-7-tauri-v2-binary-frame-transport-rust--webview)).
 
 ## 3. Channels (core → webview, streaming)
