@@ -12,10 +12,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use kivori_desktop::activity::{ActivityEventKind, ActivityLog, ActivityMetadata};
 use kivori_desktop::device::fsm::{ConnectionManager, ManagerEvent};
 use kivori_desktop::device::session::{Session, SessionConfig};
 use kivori_desktop::device::transport::SerialLink;
-use kivori_desktop::diagnostics::{lifecycle_diagnostic, DiagnosticsLog};
 use kivori_desktop::ipc::dto;
 use kivori_desktop::orchestrator::Orchestrator;
 use kivori_desktop::render::render_preview_bundled;
@@ -119,7 +119,7 @@ fn offline_app_state() -> AppState {
     AppState::new(
         true,
         Arc::new(Mutex::new(dto::initial_status())),
-        Arc::new(DiagnosticsLog::new(64)),
+        Arc::new(ActivityLog::new(64)),
         tx,
         cancel,
         thread,
@@ -192,10 +192,16 @@ fn offline_core_starts_connects_updates_and_reconnects_without_network() {
         "reconnect resyncs the desired state"
     );
 
-    // 6. Diagnostics recorded locally, nothing shipped anywhere.
-    let (at, diag) = lifecycle_diagnostic(manager.state(), manager.retry_count(), 10);
-    app.diagnostics.record(at, diag);
-    assert_eq!(app.diagnostics.recent(8).len(), 1);
+    // 6. Activity is recorded in process memory only.
+    app.activity_log.record(
+        ActivityEventKind::ConnectionStateChanged,
+        Some(ActivityMetadata::Connection {
+            state: manager.state(),
+            retry_count: manager.retry_count(),
+            elapsed_ms: 10,
+        }),
+    );
+    assert_eq!(app.activity_log.recent(8).len(), 1);
 
     app.shutdown();
 

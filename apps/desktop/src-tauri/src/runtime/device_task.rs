@@ -5,8 +5,8 @@
 //! loss. It survives window close-to-hide, webview reload, webview loss, and frontend navigation
 //! because nothing in its lifetime is tied to the window; it stops only when `cancel` is set (explicit
 //! Quit / process shutdown). Snapshot changes are published to the shared cell and emitted as
-//! `connection://status`; every lifecycle transition is also recorded as a redacted `SafeDiagnostic`
-//! and emitted as `diagnostics://event` (T105). Real serial behaviour is validated manually (no
+//! `connection://status`; every lifecycle transition is also recorded as typed session activity and
+//! emitted as `activity-log://event`. Real serial behaviour is validated manually (no
 //! hardware in host CI).
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,13 +17,13 @@ use std::time::{Duration, Instant};
 
 use tauri::AppHandle;
 
+use crate::activity::{ActivityEventKind, ActivityLog, ActivityMetadata};
 use crate::companion::CompanionDirector;
 use crate::device::discovery::DEFAULT_ALLOWLIST;
 use crate::device::fsm::{ConnectionManager, ManagerEvent};
 use crate::device::reconnect::base_delay_ms;
 use crate::device::serial::{first_candidate, SerialPortLink};
 use crate::device::session::{Session, SessionConfig};
-use crate::diagnostics::{lifecycle_diagnostic, DiagnosticsLog};
 use crate::firmware::{self, FirmwareStatus, FlashWorkflow, ResumeTarget};
 use crate::ipc::dto::{connection_status, ConnectionStatusDto};
 use crate::ipc::events;
@@ -101,21 +101,21 @@ impl ConnectionDeadlines {
 pub fn spawn(
     app: AppHandle,
     status: Arc<Mutex<ConnectionStatusDto>>,
-    diagnostics: Arc<DiagnosticsLog>,
+    activity_log: Arc<ActivityLog>,
     firmware_status: Arc<Mutex<FirmwareStatus>>,
     commands: Receiver<DeviceCommand>,
     cancel: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name("kivori-device".to_string())
-        .spawn(move || device_loop(app, status, diagnostics, firmware_status, commands, cancel))
+        .spawn(move || device_loop(app, status, activity_log, firmware_status, commands, cancel))
         .expect("spawn kivori-device thread")
 }
 
 fn device_loop(
     app: AppHandle,
     status: Arc<Mutex<ConnectionStatusDto>>,
-    diagnostics: Arc<DiagnosticsLog>,
+    activity_log: Arc<ActivityLog>,
     firmware_status: Arc<Mutex<FirmwareStatus>>,
     commands: Receiver<DeviceCommand>,
     cancel: Arc<AtomicBool>,
@@ -147,7 +147,7 @@ fn device_loop(
     *status.lock().expect("status lock") = last.clone();
     events::emit_status(&app, &last);
     let mut previous_state = manager.state();
-    record(&app, &diagnostics, &manager, started);
+    record(&app, &activity_log, &manager, started);
 
     while !cancel.load(Ordering::SeqCst) {
         // 1. Apply queued UI commands.
@@ -395,7 +395,7 @@ fn device_loop(
         let current_state = manager.state();
         if current_state != previous_state {
             previous_state = current_state;
-            record(&app, &diagnostics, &manager, started);
+            record(&app, &activity_log, &manager, started);
         }
 
         std::thread::sleep(TICK);
@@ -437,17 +437,23 @@ fn flash_target(workflow: &FlashWorkflow) -> Option<&str> {
     workflow.target_port()
 }
 
-/// Records the manager's current lifecycle state as a safe diagnostic and emits it to the webview.
+/// Records the manager's lifecycle transition as typed activity and emits it to the webview.
 fn record(
     app: &AppHandle,
-    diagnostics: &DiagnosticsLog,
+    activity_log: &ActivityLog,
     manager: &ConnectionManager,
     started: Instant,
 ) {
     tracing::info!(connection = ?manager.state(), retries = manager.retry_count(), "device connection changed");
     let elapsed_ms = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
-    let (at, diag) = lifecycle_diagnostic(manager.state(), manager.retry_count(), elapsed_ms);
-    let dto = crate::ipc::dto::diagnostic_event(&diag, at.clone());
-    diagnostics.record(at, diag);
-    events::emit_diagnostic(app, &dto);
+    let event = activity_log.record(
+        ActivityEventKind::ConnectionStateChanged,
+        Some(ActivityMetadata::Connection {
+            state: manager.state(),
+            retry_count: manager.retry_count(),
+            elapsed_ms,
+        }),
+    );
+    let dto = crate::ipc::dto::activity_event(&event);
+    events::emit_activity_log(app, &dto);
 }

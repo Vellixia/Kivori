@@ -4,9 +4,9 @@
 //! firmware (constitution Principle II). The Tauri command surface, connection manager, and window
 //! lifecycle are added in their feature phases; the binary (`main.rs`) wires them together.
 
+pub mod activity;
 pub mod companion;
 pub mod device;
-pub mod diagnostics;
 pub mod firmware;
 pub mod ipc;
 pub mod orchestrator;
@@ -31,13 +31,13 @@ pub fn run() {
             let (commands_tx, commands_rx) = std::sync::mpsc::channel();
             let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let status = std::sync::Arc::new(std::sync::Mutex::new(ipc::dto::initial_status()));
-            let diagnostics = std::sync::Arc::new(diagnostics::DiagnosticsLog::new(256));
+            let activity_log = std::sync::Arc::new(activity::ActivityLog::new(256));
             let firmware_status =
                 std::sync::Arc::new(std::sync::Mutex::new(firmware::initial_status()));
             let device_thread = runtime::device_task::spawn(
                 app.handle().clone(),
                 std::sync::Arc::clone(&status),
-                std::sync::Arc::clone(&diagnostics),
+                std::sync::Arc::clone(&activity_log),
                 std::sync::Arc::clone(&firmware_status),
                 commands_rx,
                 std::sync::Arc::clone(&cancel),
@@ -45,7 +45,7 @@ pub fn run() {
             app.manage(runtime::state::AppState::new_with_firmware(
                 cfg!(feature = "device-studio"),
                 status,
-                diagnostics,
+                activity_log,
                 firmware_status,
                 commands_tx,
                 cancel,
@@ -63,7 +63,7 @@ pub fn run() {
         ipc::commands::set_desired_state,
         ipc::commands::configure_companion,
         ipc::commands::play_mascot_action,
-        ipc::commands::get_diagnostics,
+        ipc::commands::get_activity_log,
         ipc::commands::get_firmware_status,
         ipc::commands::flash_firmware,
         ipc::commands::render_preview_frame,
@@ -81,7 +81,7 @@ pub fn run() {
         ipc::commands::set_desired_state,
         ipc::commands::configure_companion,
         ipc::commands::play_mascot_action,
-        ipc::commands::get_diagnostics,
+        ipc::commands::get_activity_log,
         ipc::commands::get_firmware_status,
         ipc::commands::flash_firmware,
     ]);

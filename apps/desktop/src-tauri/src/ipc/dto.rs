@@ -8,11 +8,11 @@ use kivori_model::{
     CompanionState, ConnectionState, MascotAction, MascotPersonality, ProtocolVersion,
     SendableState,
 };
-use kivori_protocol::{ErrorCategory, MascotActionApplied, PROTOCOL_MAJOR, PROTOCOL_MINOR};
+use kivori_protocol::{MascotActionApplied, PROTOCOL_MAJOR, PROTOCOL_MINOR};
 use serde::Serialize;
 
+use crate::activity::{ActivityEvent, ActivityEventKind, ActivityMetadata};
 use crate::device::fsm::ConnectionManager;
-use crate::diagnostics::SafeDiagnostic;
 use crate::orchestrator::Orchestrator;
 
 /// Lowercase wire token for a connection state (ipc.md §4).
@@ -68,21 +68,6 @@ pub fn sendable_token(state: SendableState) -> &'static str {
         SendableState::Happy => "happy",
         SendableState::Busy => "busy",
         SendableState::Sleeping => "sleeping",
-    }
-}
-
-/// Lowercase wire token for a diagnostic category (matches the wire `ErrorCategory`).
-#[must_use]
-pub fn category_token(category: ErrorCategory) -> &'static str {
-    match category {
-        ErrorCategory::Io => "io",
-        ErrorCategory::Handshake => "handshake",
-        ErrorCategory::Version => "version",
-        ErrorCategory::Framing => "framing",
-        ErrorCategory::Checksum => "checksum",
-        ErrorCategory::Timeout => "timeout",
-        ErrorCategory::Busy => "busy",
-        ErrorCategory::BadPayload => "bad_payload",
     }
 }
 
@@ -164,28 +149,52 @@ pub struct MascotActionAppliedDto {
     pub applied_at_ms: u32,
 }
 
-/// A safe diagnostic event (the ADR-0005 allowlist as a wire DTO).
+/// One typed session activity event safe to send to the webview.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DiagnosticEventDto {
-    /// ISO-8601 timestamp (wall clock, added at the boundary).
+pub struct ActivityEventDto {
+    /// Process-monotonic event identifier.
+    pub id: u64,
+    /// Native-generated ISO-8601 timestamp.
     pub at: String,
-    /// Connection state at the time of the event.
-    pub connection: String,
-    /// Safe diagnostic category.
-    pub category: String,
-    /// Message kind name (never contents).
-    pub message_type: Option<String>,
-    /// Payload length in bytes (never the bytes).
-    pub payload_len: Option<u16>,
-    /// Frame sequence number.
-    pub seq: Option<u16>,
+    /// Closed event-kind token.
+    #[serde(rename = "type")]
+    pub event_type: ActivityEventTypeDto,
+    /// Native-generated human-readable summary.
+    pub summary: String,
+    /// Optional fixed-shape, allowlisted event details.
+    pub metadata: Option<ActivityMetadataDto>,
+}
+
+/// Fixed-shape activity metadata; there is deliberately no arbitrary details map.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityMetadataDto {
+    /// Connection state for a lifecycle transition.
+    pub connection: ActivityConnectionStateDto,
     /// Consecutive reconnect attempts.
     pub retry_count: u32,
     /// Monotonic elapsed-ms marker.
     pub elapsed_ms: u32,
-    /// Short hash of the device identity (never the raw id).
-    pub device_id_hash_short: Option<String>,
+}
+
+/// Closed activity-event type token serialized to the webview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActivityEventTypeDto {
+    /// A device connection lifecycle state changed.
+    ConnectionStateChanged,
+}
+
+/// Closed connection-state token serialized in activity metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActivityConnectionStateDto {
+    Connecting,
+    Connected,
+    Incompatible,
+    Disconnected,
+    Error,
 }
 
 /// Projects application info. `device_studio_enabled` reflects the compiled-in Device Studio feature.
@@ -240,19 +249,45 @@ pub fn mascot_action_applied(value: MascotActionApplied) -> MascotActionAppliedD
     }
 }
 
-/// Projects a safe diagnostic to its wire DTO, stamping the given ISO-8601 time.
+/// Projects a typed activity record to its wire DTO.
 #[must_use]
-pub fn diagnostic_event(diag: &SafeDiagnostic, at: String) -> DiagnosticEventDto {
-    DiagnosticEventDto {
-        at,
-        connection: connection_token(diag.connection).to_string(),
-        category: category_token(diag.category).to_string(),
-        message_type: diag.message_type.map(str::to_string),
-        payload_len: diag.payload_len,
-        seq: diag.seq,
-        retry_count: diag.retry_count,
-        elapsed_ms: diag.elapsed_ms,
-        device_id_hash_short: diag.device_id_hash_short.clone(),
+pub fn activity_event(event: &ActivityEvent) -> ActivityEventDto {
+    ActivityEventDto {
+        id: event.id(),
+        at: event.at().to_string(),
+        event_type: activity_kind_token(event.kind()),
+        summary: event.summary().to_string(),
+        metadata: event.metadata().map(activity_metadata),
+    }
+}
+
+fn activity_kind_token(kind: ActivityEventKind) -> ActivityEventTypeDto {
+    match kind {
+        ActivityEventKind::ConnectionStateChanged => ActivityEventTypeDto::ConnectionStateChanged,
+    }
+}
+
+fn activity_metadata(metadata: &ActivityMetadata) -> ActivityMetadataDto {
+    match metadata {
+        ActivityMetadata::Connection {
+            state,
+            retry_count,
+            elapsed_ms,
+        } => ActivityMetadataDto {
+            connection: activity_connection_state(*state),
+            retry_count: *retry_count,
+            elapsed_ms: *elapsed_ms,
+        },
+    }
+}
+
+fn activity_connection_state(state: ConnectionState) -> ActivityConnectionStateDto {
+    match state {
+        ConnectionState::Connecting => ActivityConnectionStateDto::Connecting,
+        ConnectionState::Connected => ActivityConnectionStateDto::Connected,
+        ConnectionState::Incompatible => ActivityConnectionStateDto::Incompatible,
+        ConnectionState::Disconnected => ActivityConnectionStateDto::Disconnected,
+        ConnectionState::Error => ActivityConnectionStateDto::Error,
     }
 }
 

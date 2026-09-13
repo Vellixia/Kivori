@@ -8,7 +8,7 @@
 use tauri::State;
 
 use crate::firmware::FirmwareStatus;
-use crate::ipc::dto::{self, AppInfoDto, ConnectionStatusDto, DiagnosticEventDto};
+use crate::ipc::dto::{self, ActivityEventDto, AppInfoDto, ConnectionStatusDto};
 use crate::runtime::state::{AppState, DeviceCommand};
 use kivori_model::CompanionState;
 
@@ -106,13 +106,13 @@ pub fn flash_firmware(app: State<'_, AppState>) -> Result<(), String> {
     app.queue_firmware_flash()
 }
 
-/// Recent safe diagnostics, newest last, capped at `limit` (all builds).
+/// Recent session activity, oldest first, capped at `limit` (all builds).
 #[tauri::command]
-pub fn get_diagnostics(app: State<'_, AppState>, limit: u16) -> Vec<DiagnosticEventDto> {
-    app.diagnostics
+pub fn get_activity_log(app: State<'_, AppState>, limit: u16) -> Vec<ActivityEventDto> {
+    app.activity_log
         .recent(limit as usize)
         .into_iter()
-        .map(|(at, diag)| dto::diagnostic_event(&diag, at))
+        .map(|event| dto::activity_event(&event))
         .collect()
 }
 

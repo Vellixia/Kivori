@@ -2,7 +2,7 @@
 
 use kivori_desktop::firmware::{FirmwarePhase, FlashWorkflow, ResumeTarget};
 use kivori_desktop::runtime::state::{AppState, DeviceCommand};
-use kivori_desktop::{diagnostics::DiagnosticsLog, ipc::dto};
+use kivori_desktop::{activity::ActivityLog, ipc::dto};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -61,7 +61,7 @@ fn app_state_reserves_flash_before_queuing_a_second_request() {
     let state = AppState::new(
         false,
         Arc::new(Mutex::new(connected)),
-        Arc::new(DiagnosticsLog::new(8)),
+        Arc::new(ActivityLog::new(8)),
         tx,
         Arc::clone(&cancel),
         thread,
