@@ -80,7 +80,7 @@ impl FlashWorkflow {
         } else {
             "Firmware is unavailable in this application build.".to_string()
         };
-        Self {
+        let mut workflow = Self {
             status: FirmwareStatus {
                 available,
                 phase: FirmwarePhase::Idle,
@@ -90,7 +90,13 @@ impl FlashWorkflow {
             target_port: None,
             expected_device_hash: None,
             activity: Vec::new(),
-        }
+        };
+        workflow.observe(if available {
+            ActivityEventKind::FirmwareAvailable
+        } else {
+            ActivityEventKind::FirmwareUnavailable
+        });
+        workflow
     }
 
     /// Returns the safe status projection.
@@ -169,6 +175,7 @@ impl FlashWorkflow {
             "The connected device is no longer available for firmware flashing.".to_string();
         self.target_port = None;
         self.expected_device_hash = None;
+        self.observe(ActivityEventKind::FirmwarePreparationRejected);
     }
 
     /// Completes process execution and selects the safe connection-resume mode.

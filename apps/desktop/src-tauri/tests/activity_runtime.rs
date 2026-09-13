@@ -5,11 +5,14 @@ use std::convert::Infallible;
 
 use kivori_desktop::activity::{
     ActivityEventKind, ActivityMetadata, ActivityOutcome, RuntimeActivityPlanner,
+    RuntimeActivityRequest,
 };
 use kivori_desktop::device::fsm::ConnectionManager;
 use kivori_desktop::device::session::{Session, SessionConfig};
 use kivori_desktop::device::transport::SerialLink;
 use kivori_desktop::orchestrator::Orchestrator;
+use kivori_desktop::runtime::device_task::plan_device_request;
+use kivori_desktop::runtime::state::DeviceCommand;
 use kivori_model::{CompanionState, ProtocolVersion};
 use kivori_protocol::{
     encode_message, Diagnostic, ErrorCategory, MascotActionApplied, Message, PROTOCOL_MAJOR,
@@ -289,13 +292,46 @@ fn planner_retains_failure_retry_and_recovery_across_intervening_states() {
 
 #[test]
 fn planner_builds_distinct_closed_request_metadata_in_order() {
-    let requests = RuntimeActivityPlanner::requests(
-        kivori_model::SendableState::Busy,
-        kivori_model::MascotPersonality::Playful,
-        false,
-        kivori_model::MascotAction::Pet,
-        44,
-    );
+    let planner = RuntimeActivityPlanner::new();
+    let cue = kivori_protocol::PlayMascotAction {
+        action: kivori_model::MascotAction::Pet,
+        personality: kivori_model::MascotPersonality::Playful,
+        seed: 44,
+    };
+    let requests = [
+        plan_device_request(
+            &planner,
+            &DeviceCommand::SetDesired(kivori_model::SendableState::Busy),
+            None,
+        ),
+        plan_device_request(
+            &planner,
+            &DeviceCommand::MirrorDesired(kivori_model::SendableState::Busy),
+            None,
+        ),
+        plan_device_request(
+            &planner,
+            &DeviceCommand::ConfigureCompanion {
+                personality: kivori_model::MascotPersonality::Playful,
+                self_play: false,
+            },
+            None,
+        ),
+        plan_device_request(
+            &planner,
+            &DeviceCommand::PlayMascotAction(kivori_model::MascotAction::Pet),
+            Some(&cue),
+        ),
+        planner.requests(RuntimeActivityRequest::SocialAction {
+            action: cue.action,
+            personality: cue.personality,
+            seed: cue.seed,
+            autonomous: true,
+        }),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
     assert_eq!(
         requests.iter().map(|entry| entry.kind).collect::<Vec<_>>(),
         [

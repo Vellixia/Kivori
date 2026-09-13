@@ -400,6 +400,25 @@ pub struct RuntimeActivityPlanner {
     pending_recovery: bool,
 }
 
+/// One closed runtime request for which the device loop needs an activity observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeActivityRequest {
+    State {
+        state: SendableState,
+        mirrored: bool,
+    },
+    CompanionConfiguration {
+        personality: MascotPersonality,
+        self_play: bool,
+    },
+    SocialAction {
+        action: MascotAction,
+        personality: MascotPersonality,
+        seed: u32,
+        autonomous: bool,
+    },
+}
+
 impl RuntimeActivityPlanner {
     #[must_use]
     pub const fn new() -> Self {
@@ -426,16 +445,14 @@ impl RuntimeActivityPlanner {
         })
     }
     #[must_use]
-    pub fn requests(
-        state: SendableState,
-        personality: MascotPersonality,
-        self_play: bool,
-        action: MascotAction,
-        seed: u32,
-    ) -> [SessionActivity; 6] {
-        [
-            SessionActivity::new(
-                ActivityEventKind::StateRequested,
+    pub fn requests(&self, request: RuntimeActivityRequest) -> Vec<SessionActivity> {
+        match request {
+            RuntimeActivityRequest::State { state, mirrored } => vec![SessionActivity::new(
+                if mirrored {
+                    ActivityEventKind::MirroredStateRequested
+                } else {
+                    ActivityEventKind::StateRequested
+                },
                 Some(ActivityMetadata::Action {
                     state: Some(state),
                     personality: None,
@@ -445,57 +462,47 @@ impl RuntimeActivityPlanner {
                     applied_at_ms: None,
                     autonomous: Some(false),
                 }),
-            ),
-            SessionActivity::new(
-                ActivityEventKind::MirroredStateRequested,
-                Some(ActivityMetadata::Action {
-                    state: Some(state),
-                    personality: None,
-                    self_play: None,
-                    action: None,
-                    seed: None,
-                    applied_at_ms: None,
-                    autonomous: Some(false),
-                }),
-            ),
-            SessionActivity::new(
-                ActivityEventKind::PersonalityConfigured,
-                Some(ActivityMetadata::Action {
-                    state: None,
-                    personality: Some(personality),
-                    self_play: None,
-                    action: None,
-                    seed: None,
-                    applied_at_ms: None,
-                    autonomous: None,
-                }),
-            ),
-            SessionActivity::new(
-                ActivityEventKind::SelfPlayConfigured,
-                Some(ActivityMetadata::Action {
-                    state: None,
-                    personality: None,
-                    self_play: Some(self_play),
-                    action: None,
-                    seed: None,
-                    applied_at_ms: None,
-                    autonomous: None,
-                }),
-            ),
-            SessionActivity::new(
-                ActivityEventKind::ManualSocialActionRequested,
-                Some(ActivityMetadata::Action {
-                    state: None,
-                    personality: Some(personality),
-                    self_play: None,
-                    action: Some(action),
-                    seed: Some(seed),
-                    applied_at_ms: None,
-                    autonomous: Some(false),
-                }),
-            ),
-            SessionActivity::new(
-                ActivityEventKind::AutonomousSocialActionRequested,
+            )],
+            RuntimeActivityRequest::CompanionConfiguration {
+                personality,
+                self_play,
+            } => vec![
+                SessionActivity::new(
+                    ActivityEventKind::PersonalityConfigured,
+                    Some(ActivityMetadata::Action {
+                        state: None,
+                        personality: Some(personality),
+                        self_play: None,
+                        action: None,
+                        seed: None,
+                        applied_at_ms: None,
+                        autonomous: None,
+                    }),
+                ),
+                SessionActivity::new(
+                    ActivityEventKind::SelfPlayConfigured,
+                    Some(ActivityMetadata::Action {
+                        state: None,
+                        personality: None,
+                        self_play: Some(self_play),
+                        action: None,
+                        seed: None,
+                        applied_at_ms: None,
+                        autonomous: None,
+                    }),
+                ),
+            ],
+            RuntimeActivityRequest::SocialAction {
+                action,
+                personality,
+                seed,
+                autonomous,
+            } => vec![SessionActivity::new(
+                if autonomous {
+                    ActivityEventKind::AutonomousSocialActionRequested
+                } else {
+                    ActivityEventKind::ManualSocialActionRequested
+                },
                 Some(ActivityMetadata::Action {
                     state: None,
                     personality: Some(personality),
@@ -503,10 +510,10 @@ impl RuntimeActivityPlanner {
                     action: Some(action),
                     seed: Some(seed),
                     applied_at_ms: None,
-                    autonomous: Some(true),
+                    autonomous: Some(autonomous),
                 }),
-            ),
-        ]
+            )],
+        }
     }
 }
 

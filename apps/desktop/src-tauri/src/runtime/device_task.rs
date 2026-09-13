@@ -17,7 +17,10 @@ use std::time::{Duration, Instant};
 
 use tauri::AppHandle;
 
-use crate::activity::{ActivityEventKind, ActivityLog, ActivityMetadata, RuntimeActivityPlanner};
+use crate::activity::{
+    ActivityEventKind, ActivityLog, ActivityMetadata, RuntimeActivityPlanner,
+    RuntimeActivityRequest, SessionActivity,
+};
 use crate::companion::CompanionDirector;
 use crate::device::discovery::DEFAULT_ALLOWLIST;
 use crate::device::fsm::{ConnectionManager, ManagerEvent};
@@ -30,6 +33,7 @@ use crate::ipc::events;
 use crate::orchestrator::Orchestrator;
 use crate::runtime::state::DeviceCommand;
 use kivori_model::{CompanionState, MascotPersonality};
+use kivori_protocol::PlayMascotAction;
 
 const TICK: Duration = Duration::from_millis(50);
 
@@ -134,15 +138,7 @@ fn device_loop(
         firmware::BUNDLED_FIRMWARE.len() as u64,
     );
     publish_firmware_status(&firmware_status, &flash);
-    record_kind(
-        &app,
-        &activity_log,
-        if flash.status().available {
-            ActivityEventKind::FirmwareAvailable
-        } else {
-            ActivityEventKind::FirmwareUnavailable
-        },
-    );
+    drain_firmware_activity(&app, &activity_log, &mut flash);
     let started = Instant::now();
 
     let mut last = connection_status(
@@ -156,56 +152,17 @@ fn device_loop(
     *status.lock().expect("status lock") = last.clone();
     events::emit_status(&app, &last);
     let mut previous_state = manager.state();
-    let activity_planner = RuntimeActivityPlanner::new();
-    let mut recovering = false;
+    let mut activity_planner = RuntimeActivityPlanner::new();
     record(&app, &activity_log, &manager, started);
 
     while !cancel.load(Ordering::SeqCst) {
         // 1. Apply queued UI commands.
         while let Ok(command) = commands.try_recv() {
-            let requested_activity = match &command {
-                DeviceCommand::SetDesired(state) => Some((
-                    ActivityEventKind::StateRequested,
-                    Some(ActivityMetadata::Action {
-                        state: Some(*state),
-                        personality: None,
-                        self_play: None,
-                        action: None,
-                        seed: None,
-                        applied_at_ms: None,
-                        autonomous: Some(false),
-                    }),
-                )),
-                DeviceCommand::MirrorDesired(state) => Some((
-                    ActivityEventKind::MirroredStateRequested,
-                    Some(ActivityMetadata::Action {
-                        state: Some(*state),
-                        personality: None,
-                        self_play: None,
-                        action: None,
-                        seed: None,
-                        applied_at_ms: None,
-                        autonomous: Some(false),
-                    }),
-                )),
-                DeviceCommand::PlayMascotAction(action) => Some((
-                    ActivityEventKind::ManualSocialActionRequested,
-                    Some(ActivityMetadata::Action {
-                        state: None,
-                        personality: None,
-                        self_play: None,
-                        action: Some(*action),
-                        seed: None,
-                        applied_at_ms: None,
-                        autonomous: Some(false),
-                    }),
-                )),
-                DeviceCommand::FlashFirmware => None,
-                DeviceCommand::ConfigureCompanion { .. } | DeviceCommand::Refresh => None,
-            };
-            if let Some((kind, metadata)) = requested_activity {
-                record_with_metadata(&app, &activity_log, kind, metadata);
-            }
+            record_observations(
+                &app,
+                &activity_log,
+                plan_device_request(&activity_planner, &command, None),
+            );
             match command {
                 DeviceCommand::SetDesired(_) | DeviceCommand::MirrorDesired(_)
                     if flash.is_busy() =>
@@ -224,9 +181,10 @@ fn device_loop(
                         }
                     };
                     if write_failed {
-                        recovering |= recover_link(
+                        recover_link(
                             &app,
                             &activity_log,
+                            &mut activity_planner,
                             &mut manager,
                             ManagerEvent::IoError,
                             &mut link,
@@ -244,38 +202,19 @@ fn device_loop(
                     let now = elapsed_ms(started.elapsed());
                     companion.set_personality(personality, now);
                     companion.set_self_play(self_play, now);
-                    record_with_metadata(
-                        &app,
-                        &activity_log,
-                        ActivityEventKind::PersonalityConfigured,
-                        Some(ActivityMetadata::Action {
-                            state: None,
-                            personality: Some(personality),
-                            self_play: None,
-                            action: None,
-                            seed: None,
-                            applied_at_ms: None,
-                            autonomous: None,
-                        }),
-                    );
-                    record_with_metadata(
-                        &app,
-                        &activity_log,
-                        ActivityEventKind::SelfPlayConfigured,
-                        Some(ActivityMetadata::Action {
-                            state: None,
-                            personality: None,
-                            self_play: Some(self_play),
-                            action: None,
-                            seed: None,
-                            applied_at_ms: None,
-                            autonomous: None,
-                        }),
-                    );
                 }
                 DeviceCommand::PlayMascotAction(_) if flash.is_busy() => {}
                 DeviceCommand::PlayMascotAction(action) => {
                     let cue = companion.manual(action);
+                    record_observations(
+                        &app,
+                        &activity_log,
+                        plan_device_request(
+                            &activity_planner,
+                            &DeviceCommand::PlayMascotAction(action),
+                            Some(&cue),
+                        ),
+                    );
                     let write_failed = match link.as_mut() {
                         Some(open_link) => session
                             .play_mascot_action(
@@ -289,9 +228,10 @@ fn device_loop(
                         None => false,
                     };
                     if write_failed {
-                        recovering |= recover_link(
+                        recover_link(
                             &app,
                             &activity_log,
+                            &mut activity_planner,
                             &mut manager,
                             ManagerEvent::IoError,
                             &mut link,
@@ -315,14 +255,11 @@ fn device_loop(
                         if !flash.is_busy() {
                             flash.fail_preparation();
                         }
-                        record_kind(
-                            &app,
-                            &activity_log,
-                            ActivityEventKind::FirmwarePreparationRejected,
-                        );
+                        drain_firmware_activity(&app, &activity_log, &mut flash);
                         publish_firmware_status(&firmware_status, &flash);
                         continue;
                     };
+                    drain_firmware_activity(&app, &activity_log, &mut flash);
                     publish_firmware_status(&firmware_status, &flash);
 
                     // This drop closes the serial handle before `espflash` opens the same port.
@@ -330,11 +267,18 @@ fn device_loop(
                     connected_port = None;
                     deadlines.on_link_lost();
                     manager.apply(ManagerEvent::PortRemoved);
-                    flash.mark_serial_released();
-                    flash.mark_flashing();
-                    publish_firmware_status(&firmware_status, &flash);
 
-                    let resume = flash.finish(firmware::flash_bundled(&port, &cancel));
+                    let resume = run_accepted_firmware_flash(
+                        &mut flash,
+                        |flashing_status| {
+                            *firmware_status.lock().expect("firmware status lock") =
+                                flashing_status.clone();
+                            firmware::flash_bundled(&port, &cancel)
+                        },
+                        |observation| {
+                            record_observations(&app, &activity_log, [observation]);
+                        },
+                    );
                     publish_firmware_status(&firmware_status, &flash);
                     retry_at = None;
                     match resume {
@@ -420,9 +364,10 @@ fn device_loop(
                 };
 
                 if let Some(event) = event {
-                    recovering |= recover_link(
+                    recover_link(
                         &app,
                         &activity_log,
+                        &mut activity_planner,
                         &mut manager,
                         event,
                         &mut link,
@@ -459,18 +404,14 @@ fn device_loop(
             CompanionState::Offline
         };
         if let Some(cue) = companion.poll(elapsed_ms(started.elapsed()), companion_state) {
-            record_with_metadata(
+            record_observations(
                 &app,
                 &activity_log,
-                ActivityEventKind::AutonomousSocialActionRequested,
-                Some(ActivityMetadata::Action {
-                    state: None,
-                    personality: Some(cue.personality),
-                    self_play: None,
-                    action: Some(cue.action),
-                    seed: Some(cue.seed),
-                    applied_at_ms: None,
-                    autonomous: Some(true),
+                activity_planner.requests(RuntimeActivityRequest::SocialAction {
+                    action: cue.action,
+                    personality: cue.personality,
+                    seed: cue.seed,
+                    autonomous: true,
                 }),
             );
             let write_failed = match link.as_mut() {
@@ -480,9 +421,10 @@ fn device_loop(
                 None => false,
             };
             if write_failed {
-                recovering |= recover_link(
+                recover_link(
                     &app,
                     &activity_log,
+                    &mut activity_planner,
                     &mut manager,
                     ManagerEvent::IoError,
                     &mut link,
@@ -513,9 +455,12 @@ fn device_loop(
         //    disconnect, recoverable error, reconnect attempt) — T105.
         let current_state = manager.state();
         if current_state != previous_state {
-            if current_state == kivori_model::ConnectionState::Connected && recovering {
-                record_kind(&app, &activity_log, ActivityEventKind::ConnectionRecovered);
-                recovering = false;
+            if current_state == kivori_model::ConnectionState::Connected {
+                record_observations(
+                    &app,
+                    &activity_log,
+                    activity_planner.recovered().into_iter(),
+                );
             }
             previous_state = current_state;
             record(&app, &activity_log, &manager, started);
@@ -529,9 +474,70 @@ fn elapsed_ms(elapsed: Duration) -> u32 {
     u32::try_from(elapsed.as_millis()).unwrap_or(u32::MAX)
 }
 
+/// Maps the real device-command boundary through the shared runtime activity planner.
+///
+/// A social command is observable only after the director has supplied its closed personality and
+/// seed values, so callers pass that cue on the accepted command path.
+#[must_use]
+pub fn plan_device_request(
+    activity_planner: &RuntimeActivityPlanner,
+    command: &DeviceCommand,
+    social_cue: Option<&PlayMascotAction>,
+) -> Vec<SessionActivity> {
+    let request = match command {
+        DeviceCommand::SetDesired(state) => Some(RuntimeActivityRequest::State {
+            state: *state,
+            mirrored: false,
+        }),
+        DeviceCommand::MirrorDesired(state) => Some(RuntimeActivityRequest::State {
+            state: *state,
+            mirrored: true,
+        }),
+        DeviceCommand::ConfigureCompanion {
+            personality,
+            self_play,
+        } => Some(RuntimeActivityRequest::CompanionConfiguration {
+            personality: *personality,
+            self_play: *self_play,
+        }),
+        DeviceCommand::PlayMascotAction(_) => {
+            social_cue.map(|cue| RuntimeActivityRequest::SocialAction {
+                action: cue.action,
+                personality: cue.personality,
+                seed: cue.seed,
+                autonomous: false,
+            })
+        }
+        DeviceCommand::FlashFirmware | DeviceCommand::Refresh => None,
+    };
+    request.map_or_else(Vec::new, |request| activity_planner.requests(request))
+}
+
+/// Runs the accepted synchronous flash path and delivers queued observations after each workflow
+/// transition, including before the potentially blocking flasher callback.
+pub fn run_accepted_firmware_flash<E>(
+    flash: &mut FlashWorkflow,
+    run_flash: impl FnOnce(&FirmwareStatus) -> Result<(), E>,
+    mut observe: impl FnMut(SessionActivity),
+) -> ResumeTarget
+where
+    E: AsRef<str>,
+{
+    flash.drain_activity().into_iter().for_each(&mut observe);
+    flash.mark_serial_released();
+    flash.drain_activity().into_iter().for_each(&mut observe);
+    flash.mark_flashing();
+    flash.drain_activity().into_iter().for_each(&mut observe);
+    let result = run_flash(flash.status());
+    let resume = flash.finish(result);
+    flash.drain_activity().into_iter().for_each(observe);
+    resume
+}
+
 fn recover_link(
     app: &AppHandle,
     activity_log: &ActivityLog,
+    activity_planner: &mut RuntimeActivityPlanner,
     manager: &mut ConnectionManager,
     event: ManagerEvent,
     link: &mut Option<SerialPortLink>,
@@ -539,12 +545,12 @@ fn recover_link(
     retry_at: &mut Option<Instant>,
     deadlines: &mut ConnectionDeadlines,
     flash: &FlashWorkflow,
-) -> bool {
-    let recoverable = matches!(
-        event,
-        ManagerEvent::IoError | ManagerEvent::HandshakeTimeout | ManagerEvent::HeartbeatTimeout
+) {
+    record_observations(
+        app,
+        activity_log,
+        activity_planner.failure(connection_event_kind(&event)),
     );
-    record_kind(app, activity_log, connection_event_kind(&event));
     manager.apply(event);
     *link = None;
     *connected_port = None;
@@ -554,13 +560,7 @@ fn recover_link(
     } else {
         let backoff = base_delay_ms(manager.retry_count());
         *retry_at = Some(Instant::now() + Duration::from_millis(backoff));
-        record_kind(
-            app,
-            activity_log,
-            ActivityEventKind::ConnectionRetryScheduled,
-        );
     }
-    recoverable
 }
 
 fn publish_firmware_status(status: &Mutex<FirmwareStatus>, workflow: &FlashWorkflow) {
@@ -594,21 +594,22 @@ fn record(
 }
 
 fn drain_session_activity(app: &AppHandle, activity_log: &ActivityLog, session: &mut Session) {
-    for observation in session.drain_activity() {
-        let event = activity_log.record(observation.kind, observation.metadata);
-        events::emit_activity_log(app, &event);
-    }
+    record_observations(app, activity_log, session.drain_activity());
 }
 
 fn drain_firmware_activity(app: &AppHandle, activity_log: &ActivityLog, flash: &mut FlashWorkflow) {
-    for observation in flash.drain_activity() {
+    record_observations(app, activity_log, flash.drain_activity());
+}
+
+fn record_observations(
+    app: &AppHandle,
+    activity_log: &ActivityLog,
+    observations: impl IntoIterator<Item = SessionActivity>,
+) {
+    for observation in observations {
         let event = activity_log.record(observation.kind, observation.metadata);
         events::emit_activity_log(app, &event);
     }
-}
-
-fn record_kind(app: &AppHandle, activity_log: &ActivityLog, kind: ActivityEventKind) {
-    record_with_metadata(app, activity_log, kind, None);
 }
 
 fn record_with_metadata(

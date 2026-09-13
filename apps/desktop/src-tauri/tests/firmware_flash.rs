@@ -2,6 +2,7 @@
 
 use kivori_desktop::activity::ActivityEventKind;
 use kivori_desktop::firmware::{FirmwarePhase, FlashWorkflow, ResumeTarget};
+use kivori_desktop::runtime::device_task::run_accepted_firmware_flash;
 use kivori_desktop::runtime::state::{AppState, DeviceCommand};
 use kivori_desktop::{activity::ActivityLog, ipc::dto};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -118,6 +119,14 @@ fn reconnect_deadline_fails_even_without_a_handshake() {
 #[test]
 fn accepted_firmware_workflow_queues_closed_ordered_phases_without_native_details() {
     let mut flash = FlashWorkflow::new(true, 512);
+    assert_eq!(
+        flash
+            .drain_activity()
+            .into_iter()
+            .map(|item| item.kind)
+            .collect::<Vec<_>>(),
+        [ActivityEventKind::FirmwareAvailable]
+    );
     assert!(flash
         .request(false, Some("COM7"), Some("deadbeef"))
         .is_err());
@@ -152,5 +161,72 @@ fn accepted_firmware_workflow_queues_closed_ordered_phases_without_native_detail
             ActivityEventKind::FirmwareReconnectWaiting,
             ActivityEventKind::FirmwarePostFlashVerified,
         ]
+    );
+}
+
+#[test]
+fn accepted_flash_drains_each_phase_before_blocking_work() {
+    use std::cell::RefCell;
+
+    let mut flash = FlashWorkflow::new(true, 512);
+    flash.drain_activity();
+    flash.request(true, Some("COM7"), Some("deadbeef")).unwrap();
+    let seen = RefCell::new(Vec::new());
+
+    let resume = run_accepted_firmware_flash(
+        &mut flash,
+        |status| {
+            assert_eq!(status.phase, FirmwarePhase::Flashing);
+            assert_eq!(
+                *seen.borrow(),
+                [
+                    ActivityEventKind::FirmwareFlashRequested,
+                    ActivityEventKind::FirmwarePreparing,
+                    ActivityEventKind::FirmwareSerialReleased,
+                    ActivityEventKind::FirmwareFlasherStarted,
+                ],
+                "accepted, preparation, serial release, and flasher start must be visible before the blocking flasher runs"
+            );
+            Ok::<(), &str>(())
+        },
+        |observation| seen.borrow_mut().push(observation.kind),
+    );
+
+    assert_eq!(resume, ResumeTarget::SamePort("COM7".to_string()));
+    assert_eq!(
+        seen.into_inner(),
+        [
+            ActivityEventKind::FirmwareFlashRequested,
+            ActivityEventKind::FirmwarePreparing,
+            ActivityEventKind::FirmwareSerialReleased,
+            ActivityEventKind::FirmwareFlasherStarted,
+            ActivityEventKind::FirmwareFlashSucceeded,
+            ActivityEventKind::FirmwareReconnectWaiting,
+        ]
+    );
+}
+
+#[test]
+fn workflow_owns_initial_availability_and_preparation_rejection() {
+    let mut flash = FlashWorkflow::new(false, 0);
+    assert_eq!(
+        flash
+            .drain_activity()
+            .into_iter()
+            .map(|item| item.kind)
+            .collect::<Vec<_>>(),
+        [ActivityEventKind::FirmwareUnavailable]
+    );
+
+    let mut flash = FlashWorkflow::new(true, 512);
+    flash.drain_activity();
+    flash.fail_preparation();
+    assert_eq!(
+        flash
+            .drain_activity()
+            .into_iter()
+            .map(|item| item.kind)
+            .collect::<Vec<_>>(),
+        [ActivityEventKind::FirmwarePreparationRejected]
     );
 }
