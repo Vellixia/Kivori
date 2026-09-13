@@ -3,7 +3,7 @@ import { Pause, Play, Send, StepForward } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Slider } from '../../components/ui/slider';
 import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
-import { mirrorState } from '../../lib/ipc';
+import { mirrorState, playMascotAction } from '../../lib/ipc';
 import type { CompanionState, MascotAction, SendableState } from '../../lib/ipc/types';
 import { COMPANION_STATES, SENDABLE_STATES, MAX_ANIMATION_EVENTS } from '../../lib/ipc/types';
 import { strings } from '../../lib/i18n/strings';
@@ -64,7 +64,10 @@ export function Controls(): ReactElement {
               type="button"
               variant="outline"
               disabled={eventLimit}
-              onClick={() => playAction(action, currentMascotPersonality())}
+              onClick={() => {
+                playAction(action, currentMascotPersonality());
+                void playMascotAction(action).catch(() => {});
+              }}
             >
               {strings.companion.actionLabels[action]}
             </Button>

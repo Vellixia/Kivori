@@ -7,6 +7,8 @@ The action reports preparation, flashing, and reconnection, and is disabled whil
 
 **Mirror to device** sends an expression command; it does not transfer artwork or install firmware.
 Use it after the firmware update to select idle, happy, busy, or sleeping.
+Device Studio's social-reaction buttons record the action in the preview and immediately request the
+same action from a connected device with mascot-interaction support.
 
 ## Build a desktop with firmware included
 
