@@ -1,5 +1,6 @@
 //! Firmware flashing state-machine coverage without hardware or a real `espflash` process.
 
+use kivori_desktop::activity::ActivityEventKind;
 use kivori_desktop::firmware::{FirmwarePhase, FlashWorkflow, ResumeTarget};
 use kivori_desktop::runtime::state::{AppState, DeviceCommand};
 use kivori_desktop::{activity::ActivityLog, ipc::dto};
@@ -112,4 +113,40 @@ fn reconnect_deadline_fails_even_without_a_handshake() {
     flash.reconnect_timed_out();
     assert_eq!(flash.status().phase, FirmwarePhase::Failed);
     assert!(flash.status().message.contains("could not be verified"));
+}
+
+#[test]
+fn accepted_firmware_workflow_queues_closed_ordered_phases_without_native_details() {
+    let mut flash = FlashWorkflow::new(true, 512);
+    assert!(flash
+        .request(false, Some("COM7"), Some("deadbeef"))
+        .is_err());
+    assert!(
+        flash.drain_activity().is_empty(),
+        "rejected work is not accepted work"
+    );
+    flash.request(true, Some("COM7"), Some("deadbeef")).unwrap();
+    flash.mark_serial_released();
+    flash.mark_flashing();
+    assert_eq!(
+        flash.finish(Ok::<(), &str>(())),
+        ResumeTarget::SamePort("COM7".to_string())
+    );
+    assert!(flash.handshake("COM7", "deadbeef", true));
+    assert_eq!(
+        flash
+            .drain_activity()
+            .into_iter()
+            .map(|item| item.kind)
+            .collect::<Vec<_>>(),
+        [
+            ActivityEventKind::FirmwareFlashRequested,
+            ActivityEventKind::FirmwarePreparing,
+            ActivityEventKind::FirmwareSerialReleased,
+            ActivityEventKind::FirmwareFlasherStarted,
+            ActivityEventKind::FirmwareFlashSucceeded,
+            ActivityEventKind::FirmwareReconnectWaiting,
+            ActivityEventKind::FirmwarePostFlashVerified,
+        ]
+    );
 }

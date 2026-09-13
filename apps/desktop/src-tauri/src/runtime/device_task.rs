@@ -199,9 +199,7 @@ fn device_loop(
                         autonomous: Some(false),
                     }),
                 )),
-                DeviceCommand::FlashFirmware => {
-                    Some((ActivityEventKind::FirmwareFlashRequested, None))
-                }
+                DeviceCommand::FlashFirmware => None,
                 DeviceCommand::ConfigureCompanion { .. } | DeviceCommand::Refresh => None,
             };
             if let Some((kind, metadata)) = requested_activity {
@@ -370,6 +368,7 @@ fn device_loop(
                     }
                 }
             }
+            drain_firmware_activity(&app, &activity_log, &mut flash);
         }
 
         // 2. Drive the link: discover + handshake when down (honoring backoff), pump when up.
@@ -626,6 +625,13 @@ fn record(
 
 fn drain_session_activity(app: &AppHandle, activity_log: &ActivityLog, session: &mut Session) {
     for observation in session.drain_activity() {
+        let event = activity_log.record(observation.kind, observation.metadata);
+        events::emit_activity_log(app, &event);
+    }
+}
+
+fn drain_firmware_activity(app: &AppHandle, activity_log: &ActivityLog, flash: &mut FlashWorkflow) {
+    for observation in flash.drain_activity() {
         let event = activity_log.record(observation.kind, observation.metadata);
         events::emit_activity_log(app, &event);
     }

@@ -8,6 +8,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::activity::{ActivityEventKind, SessionActivity};
 use serde::Serialize;
 
 /// Maximum time allowed for one `espflash` process before it is terminated.
@@ -67,6 +68,7 @@ pub struct FlashWorkflow {
     status: FirmwareStatus,
     target_port: Option<String>,
     expected_device_hash: Option<String>,
+    activity: Vec<SessionActivity>,
 }
 
 impl FlashWorkflow {
@@ -87,6 +89,7 @@ impl FlashWorkflow {
             },
             target_port: None,
             expected_device_hash: None,
+            activity: Vec::new(),
         }
     }
 
@@ -109,6 +112,11 @@ impl FlashWorkflow {
     #[must_use]
     pub(crate) fn target_port(&self) -> Option<&str> {
         self.target_port.as_deref()
+    }
+
+    /// Drains closed firmware workflow observations for the device task to record and emit.
+    pub fn drain_activity(&mut self) -> Vec<SessionActivity> {
+        std::mem::take(&mut self.activity)
     }
 
     /// Validates and reserves the currently connected native target. Returns the port for the device
@@ -137,13 +145,21 @@ impl FlashWorkflow {
         self.expected_device_hash = Some(device_hash.to_string());
         self.status.phase = FirmwarePhase::Preparing;
         self.status.message = "Preparing firmware update.".to_string();
+        self.observe(ActivityEventKind::FirmwareFlashRequested);
+        self.observe(ActivityEventKind::FirmwarePreparing);
         Ok(port.to_string())
+    }
+
+    /// Marks that the native owner released its serial session before starting the flasher.
+    pub fn mark_serial_released(&mut self) {
+        self.observe(ActivityEventKind::FirmwareSerialReleased);
     }
 
     /// Marks that the serial session has been released and the flasher now owns the port.
     pub fn mark_flashing(&mut self) {
         self.status.phase = FirmwarePhase::Flashing;
         self.status.message = "Flashing firmware.".to_string();
+        self.observe(ActivityEventKind::FirmwareFlasherStarted);
     }
 
     /// Marks that a queued update lost its device before the flash process could acquire the port.
@@ -162,6 +178,8 @@ impl FlashWorkflow {
                 self.status.phase = FirmwarePhase::Reconnecting;
                 self.status.message =
                     "Firmware flashed. Reconnecting to device for verification.".to_string();
+                self.observe(ActivityEventKind::FirmwareFlashSucceeded);
+                self.observe(ActivityEventKind::FirmwareReconnectWaiting);
                 ResumeTarget::SamePort(self.target_port.clone().unwrap_or_default())
             }
             Err(reason) => {
@@ -169,6 +187,7 @@ impl FlashWorkflow {
                 self.status.message = safe_failure_message(reason.as_ref()).to_string();
                 self.target_port = None;
                 self.expected_device_hash = None;
+                self.observe(ActivityEventKind::FirmwareUpdateFailed);
                 ResumeTarget::Discovery
             }
         }
@@ -188,6 +207,7 @@ impl FlashWorkflow {
         self.status.message = "Firmware update verified.".to_string();
         self.target_port = None;
         self.expected_device_hash = None;
+        self.observe(ActivityEventKind::FirmwarePostFlashVerified);
         true
     }
 
@@ -200,7 +220,12 @@ impl FlashWorkflow {
                     .to_string();
             self.target_port = None;
             self.expected_device_hash = None;
+            self.observe(ActivityEventKind::FirmwareReconnectTimedOut);
         }
+    }
+
+    fn observe(&mut self, kind: ActivityEventKind) {
+        self.activity.push(SessionActivity::new(kind, None));
     }
 }
 
