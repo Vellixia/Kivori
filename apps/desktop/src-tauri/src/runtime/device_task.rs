@@ -390,7 +390,7 @@ fn device_loop(
             last = snapshot;
         }
 
-        // 4. Record a redacted diagnostic for every lifecycle transition (connect, incompatible,
+        // 4. Record typed activity for every lifecycle transition (connect, incompatible,
         //    disconnect, recoverable error, reconnect attempt) — T105.
         let current_state = manager.state();
         if current_state != previous_state {
@@ -454,6 +454,5 @@ fn record(
             elapsed_ms,
         }),
     );
-    let dto = crate::ipc::dto::activity_event(&event);
-    events::emit_activity_log(app, &dto);
+    events::emit_activity_log(app, &event);
 }

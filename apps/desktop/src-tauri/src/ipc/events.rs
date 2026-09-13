@@ -6,19 +6,37 @@
 
 use tauri::{AppHandle, Emitter};
 
-use crate::ipc::dto::{ActivityEventDto, ConnectionStatusDto};
+use crate::activity::ActivityEvent;
+use crate::ipc::dto::{self, ActivityEventDto, ConnectionStatusDto};
 
 /// Event name for connection-snapshot changes.
 pub const CONNECTION_STATUS: &str = "connection://status";
 /// Event name for typed session activity records.
 pub const ACTIVITY_LOG_EVENT: &str = "activity-log://event";
 
+/// The payload passed to Tauri when a native activity record is emitted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityLogEmission {
+    pub name: &'static str,
+    pub payload: ActivityEventDto,
+}
+
 /// Broadcasts the latest connection snapshot to the webview.
 pub fn emit_status(app: &AppHandle, status: &ConnectionStatusDto) {
     let _ = app.emit(CONNECTION_STATUS, status);
 }
 
+/// Converts one recorded activity entry into its live Tauri emission contract.
+#[must_use]
+pub fn activity_log_emission(event: &ActivityEvent) -> ActivityLogEmission {
+    ActivityLogEmission {
+        name: ACTIVITY_LOG_EVENT,
+        payload: dto::activity_event(event),
+    }
+}
+
 /// Broadcasts a typed activity record to the webview.
-pub fn emit_activity_log(app: &AppHandle, event: &ActivityEventDto) {
-    let _ = app.emit(ACTIVITY_LOG_EVENT, event);
+pub fn emit_activity_log(app: &AppHandle, event: &ActivityEvent) {
+    let emission = activity_log_emission(event);
+    let _ = app.emit(emission.name, &emission.payload);
 }

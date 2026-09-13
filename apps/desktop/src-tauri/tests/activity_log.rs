@@ -1,8 +1,10 @@
 //! Native activity-log contract: chronological in-memory history and safe DTO projection.
 
+use std::sync::{Arc, Barrier};
+
 use kivori_desktop::activity::{ActivityEventKind, ActivityLog, ActivityMetadata};
 use kivori_desktop::ipc::dto;
-use kivori_desktop::ipc::events::ACTIVITY_LOG_EVENT;
+use kivori_desktop::ipc::events;
 use kivori_model::ConnectionState;
 
 #[test]
@@ -60,6 +62,9 @@ fn activity_dto_uses_closed_types_and_only_typed_optional_metadata() {
     assert_eq!(value["metadata"]["connection"], "connected");
     assert_eq!(value["metadata"]["retryCount"], 4);
     assert_eq!(value["metadata"]["elapsedMs"], 800);
+    assert_eq!(value["severity"], "info");
+    assert_eq!(value["source"], "connection");
+    assert_eq!(value["outcome"], "observed");
     assert_eq!(
         value["metadata"]
             .as_object()
@@ -77,6 +82,65 @@ fn a_new_activity_log_is_session_only_and_empty() {
 }
 
 #[test]
-fn live_activity_event_uses_the_activity_log_contract_name() {
-    assert_eq!(ACTIVITY_LOG_EVENT, "activity-log://event");
+fn activity_log_clamps_oversized_capacity_to_256_entries() {
+    let log = ActivityLog::new(300);
+    for _ in 0..300 {
+        log.record(ActivityEventKind::ConnectionStateChanged, None);
+    }
+
+    let recent = log.recent(300);
+    assert_eq!(recent.len(), 256);
+    assert!(recent.windows(2).all(|pair| pair[0].id() < pair[1].id()));
+}
+
+#[test]
+fn concurrent_records_are_returned_in_strictly_increasing_id_order() {
+    for _ in 0..32 {
+        let log = Arc::new(ActivityLog::new(128));
+        let start = Arc::new(Barrier::new(33));
+        let mut workers = Vec::new();
+        for _ in 0..32 {
+            let log = Arc::clone(&log);
+            let start = Arc::clone(&start);
+            workers.push(std::thread::spawn(move || {
+                start.wait();
+                log.record(ActivityEventKind::ConnectionStateChanged, None);
+            }));
+        }
+        start.wait();
+        for worker in workers {
+            worker.join().expect("activity writer completes");
+        }
+
+        let recent = log.recent(128);
+        assert_eq!(recent.len(), 32);
+        assert!(recent.windows(2).all(|pair| pair[0].id() < pair[1].id()));
+    }
+}
+
+#[test]
+fn activity_taxonomy_serializes_firmware_failure_with_closed_classification() {
+    let log = ActivityLog::new(1);
+    let event = log.record(ActivityEventKind::FirmwareUpdateFailed, None);
+
+    let value = serde_json::to_value(dto::activity_event(&event)).expect("activity DTO serializes");
+    assert_eq!(value["type"], "firmwareUpdateFailed");
+    assert_eq!(value["severity"], "error");
+    assert_eq!(value["source"], "firmware");
+    assert_eq!(value["outcome"], "failed");
+}
+
+#[test]
+fn record_to_emission_seam_uses_the_live_activity_contract() {
+    let event = ActivityLog::new(1).record(ActivityEventKind::ConnectionStateChanged, None);
+    let emission = events::activity_log_emission(&event);
+
+    assert_eq!(emission.name, "activity-log://event");
+    assert_eq!(
+        emission.payload.event_type,
+        dto::ActivityEventTypeDto::ConnectionStateChanged
+    );
+    assert_eq!(emission.payload.severity, dto::ActivitySeverityDto::Info);
+    assert_eq!(emission.payload.source, dto::ActivitySourceDto::Connection);
+    assert_eq!(emission.payload.outcome, dto::ActivityOutcomeDto::Observed);
 }

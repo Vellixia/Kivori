@@ -11,7 +11,10 @@ use kivori_model::{
 use kivori_protocol::{MascotActionApplied, PROTOCOL_MAJOR, PROTOCOL_MINOR};
 use serde::Serialize;
 
-use crate::activity::{ActivityEvent, ActivityEventKind, ActivityMetadata};
+use crate::activity::{
+    ActivityEvent, ActivityEventKind, ActivityMetadata, ActivityOutcome, ActivitySeverity,
+    ActivitySource,
+};
 use crate::device::fsm::ConnectionManager;
 use crate::orchestrator::Orchestrator;
 
@@ -162,6 +165,12 @@ pub struct ActivityEventDto {
     pub event_type: ActivityEventTypeDto,
     /// Native-generated human-readable summary.
     pub summary: String,
+    /// Closed severity token.
+    pub severity: ActivitySeverityDto,
+    /// Closed source token.
+    pub source: ActivitySourceDto,
+    /// Closed outcome token.
+    pub outcome: ActivityOutcomeDto,
     /// Optional fixed-shape, allowlisted event details.
     pub metadata: Option<ActivityMetadataDto>,
 }
@@ -184,6 +193,16 @@ pub struct ActivityMetadataDto {
 pub enum ActivityEventTypeDto {
     /// A device connection lifecycle state changed.
     ConnectionStateChanged,
+    ActionRequested,
+    ActionCompleted,
+    ActionFailed,
+    DeviceDiscovered,
+    DeviceRejected,
+    ProtocolMessageRejected,
+    ProtocolFailed,
+    FirmwareUpdateStarted,
+    FirmwareUpdateCompleted,
+    FirmwareUpdateFailed,
 }
 
 /// Closed connection-state token serialized in activity metadata.
@@ -195,6 +214,37 @@ pub enum ActivityConnectionStateDto {
     Incompatible,
     Disconnected,
     Error,
+}
+
+/// Closed severity token serialized to the webview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActivitySeverityDto {
+    Info,
+    Warning,
+    Error,
+}
+
+/// Closed source token serialized to the webview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActivitySourceDto {
+    Connection,
+    Action,
+    Device,
+    Protocol,
+    Firmware,
+}
+
+/// Closed outcome token serialized to the webview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActivityOutcomeDto {
+    Observed,
+    Started,
+    Succeeded,
+    Failed,
+    Rejected,
 }
 
 /// Projects application info. `device_studio_enabled` reflects the compiled-in Device Studio feature.
@@ -257,6 +307,9 @@ pub fn activity_event(event: &ActivityEvent) -> ActivityEventDto {
         at: event.at().to_string(),
         event_type: activity_kind_token(event.kind()),
         summary: event.summary().to_string(),
+        severity: activity_severity(event.severity()),
+        source: activity_source(event.source()),
+        outcome: activity_outcome(event.outcome()),
         metadata: event.metadata().map(activity_metadata),
     }
 }
@@ -264,6 +317,44 @@ pub fn activity_event(event: &ActivityEvent) -> ActivityEventDto {
 fn activity_kind_token(kind: ActivityEventKind) -> ActivityEventTypeDto {
     match kind {
         ActivityEventKind::ConnectionStateChanged => ActivityEventTypeDto::ConnectionStateChanged,
+        ActivityEventKind::ActionRequested => ActivityEventTypeDto::ActionRequested,
+        ActivityEventKind::ActionCompleted => ActivityEventTypeDto::ActionCompleted,
+        ActivityEventKind::ActionFailed => ActivityEventTypeDto::ActionFailed,
+        ActivityEventKind::DeviceDiscovered => ActivityEventTypeDto::DeviceDiscovered,
+        ActivityEventKind::DeviceRejected => ActivityEventTypeDto::DeviceRejected,
+        ActivityEventKind::ProtocolMessageRejected => ActivityEventTypeDto::ProtocolMessageRejected,
+        ActivityEventKind::ProtocolFailed => ActivityEventTypeDto::ProtocolFailed,
+        ActivityEventKind::FirmwareUpdateStarted => ActivityEventTypeDto::FirmwareUpdateStarted,
+        ActivityEventKind::FirmwareUpdateCompleted => ActivityEventTypeDto::FirmwareUpdateCompleted,
+        ActivityEventKind::FirmwareUpdateFailed => ActivityEventTypeDto::FirmwareUpdateFailed,
+    }
+}
+
+fn activity_severity(severity: ActivitySeverity) -> ActivitySeverityDto {
+    match severity {
+        ActivitySeverity::Info => ActivitySeverityDto::Info,
+        ActivitySeverity::Warning => ActivitySeverityDto::Warning,
+        ActivitySeverity::Error => ActivitySeverityDto::Error,
+    }
+}
+
+fn activity_source(source: ActivitySource) -> ActivitySourceDto {
+    match source {
+        ActivitySource::Connection => ActivitySourceDto::Connection,
+        ActivitySource::Action => ActivitySourceDto::Action,
+        ActivitySource::Device => ActivitySourceDto::Device,
+        ActivitySource::Protocol => ActivitySourceDto::Protocol,
+        ActivitySource::Firmware => ActivitySourceDto::Firmware,
+    }
+}
+
+fn activity_outcome(outcome: ActivityOutcome) -> ActivityOutcomeDto {
+    match outcome {
+        ActivityOutcome::Observed => ActivityOutcomeDto::Observed,
+        ActivityOutcome::Started => ActivityOutcomeDto::Started,
+        ActivityOutcome::Succeeded => ActivityOutcomeDto::Succeeded,
+        ActivityOutcome::Failed => ActivityOutcomeDto::Failed,
+        ActivityOutcome::Rejected => ActivityOutcomeDto::Rejected,
     }
 }
 

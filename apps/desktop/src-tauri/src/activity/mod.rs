@@ -17,6 +17,123 @@ static NEXT_ACTIVITY_ID: AtomicU64 = AtomicU64::new(1);
 pub enum ActivityEventKind {
     /// The device connection manager entered a new lifecycle state.
     ConnectionStateChanged,
+    /// A desktop-owned mascot action was requested.
+    ActionRequested,
+    /// A mascot action completed successfully.
+    ActionCompleted,
+    /// A mascot action could not be completed.
+    ActionFailed,
+    /// A device was observed by native discovery.
+    DeviceDiscovered,
+    /// A device-side operation was rejected.
+    DeviceRejected,
+    /// A protocol message was rejected before it could be applied.
+    ProtocolMessageRejected,
+    /// A protocol operation failed.
+    ProtocolFailed,
+    /// A firmware update began.
+    FirmwareUpdateStarted,
+    /// A firmware update completed successfully.
+    FirmwareUpdateCompleted,
+    /// A firmware update failed.
+    FirmwareUpdateFailed,
+}
+
+/// Closed severity vocabulary for native activity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivitySeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+/// Closed source vocabulary for native activity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivitySource {
+    Connection,
+    Action,
+    Device,
+    Protocol,
+    Firmware,
+}
+
+/// Closed outcome vocabulary for native activity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityOutcome {
+    Observed,
+    Started,
+    Succeeded,
+    Failed,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ActivityClassification {
+    severity: ActivitySeverity,
+    source: ActivitySource,
+    outcome: ActivityOutcome,
+}
+
+impl ActivityEventKind {
+    const fn classification(self) -> ActivityClassification {
+        match self {
+            Self::ConnectionStateChanged => ActivityClassification {
+                severity: ActivitySeverity::Info,
+                source: ActivitySource::Connection,
+                outcome: ActivityOutcome::Observed,
+            },
+            Self::ActionRequested => ActivityClassification {
+                severity: ActivitySeverity::Info,
+                source: ActivitySource::Action,
+                outcome: ActivityOutcome::Started,
+            },
+            Self::ActionCompleted => ActivityClassification {
+                severity: ActivitySeverity::Info,
+                source: ActivitySource::Action,
+                outcome: ActivityOutcome::Succeeded,
+            },
+            Self::ActionFailed => ActivityClassification {
+                severity: ActivitySeverity::Error,
+                source: ActivitySource::Action,
+                outcome: ActivityOutcome::Failed,
+            },
+            Self::DeviceDiscovered => ActivityClassification {
+                severity: ActivitySeverity::Info,
+                source: ActivitySource::Device,
+                outcome: ActivityOutcome::Observed,
+            },
+            Self::DeviceRejected => ActivityClassification {
+                severity: ActivitySeverity::Warning,
+                source: ActivitySource::Device,
+                outcome: ActivityOutcome::Rejected,
+            },
+            Self::ProtocolMessageRejected => ActivityClassification {
+                severity: ActivitySeverity::Warning,
+                source: ActivitySource::Protocol,
+                outcome: ActivityOutcome::Rejected,
+            },
+            Self::ProtocolFailed => ActivityClassification {
+                severity: ActivitySeverity::Error,
+                source: ActivitySource::Protocol,
+                outcome: ActivityOutcome::Failed,
+            },
+            Self::FirmwareUpdateStarted => ActivityClassification {
+                severity: ActivitySeverity::Info,
+                source: ActivitySource::Firmware,
+                outcome: ActivityOutcome::Started,
+            },
+            Self::FirmwareUpdateCompleted => ActivityClassification {
+                severity: ActivitySeverity::Info,
+                source: ActivitySource::Firmware,
+                outcome: ActivityOutcome::Succeeded,
+            },
+            Self::FirmwareUpdateFailed => ActivityClassification {
+                severity: ActivitySeverity::Error,
+                source: ActivitySource::Firmware,
+                outcome: ActivityOutcome::Failed,
+            },
+        }
+    }
 }
 
 /// Typed, optional metadata for an activity event.
@@ -42,6 +159,12 @@ pub struct ActivityEvent {
     at: String,
     /// Closed activity event kind.
     kind: ActivityEventKind,
+    /// Closed severity generated from the event kind.
+    severity: ActivitySeverity,
+    /// Closed source generated from the event kind.
+    source: ActivitySource,
+    /// Closed outcome generated from the event kind.
+    outcome: ActivityOutcome,
     /// Optional typed, allowlisted details.
     metadata: Option<ActivityMetadata>,
     /// Native-generated summary from the event kind and allowlisted metadata.
@@ -67,6 +190,24 @@ impl ActivityEvent {
         self.kind
     }
 
+    /// Closed severity generated from the event kind.
+    #[must_use]
+    pub const fn severity(&self) -> ActivitySeverity {
+        self.severity
+    }
+
+    /// Closed source generated from the event kind.
+    #[must_use]
+    pub const fn source(&self) -> ActivitySource {
+        self.source
+    }
+
+    /// Closed outcome generated from the event kind.
+    #[must_use]
+    pub const fn outcome(&self) -> ActivityOutcome {
+        self.outcome
+    }
+
     /// Optional typed, allowlisted details.
     #[must_use]
     pub const fn metadata(&self) -> Option<&ActivityMetadata> {
@@ -87,12 +228,12 @@ pub struct ActivityLog {
 }
 
 impl ActivityLog {
-    /// Creates a session-only activity ring holding at most `capacity` entries (minimum one).
+    /// Creates a session-only activity ring holding between 1 and 256 entries.
     #[must_use]
     pub fn new(capacity: usize) -> Self {
         Self {
             entries: Mutex::new(VecDeque::new()),
-            capacity: capacity.max(1),
+            capacity: capacity.clamp(1, 256),
         }
     }
 
@@ -102,14 +243,18 @@ impl ActivityLog {
         kind: ActivityEventKind,
         metadata: Option<ActivityMetadata>,
     ) -> ActivityEvent {
+        let mut entries = self.entries.lock().expect("activity log lock");
+        let classification = kind.classification();
         let event = ActivityEvent {
             id: next_activity_id(),
             at: now_iso(),
             kind,
+            severity: classification.severity,
+            source: classification.source,
+            outcome: classification.outcome,
             summary: summary_for(kind, metadata.as_ref()),
             metadata,
         };
-        let mut entries = self.entries.lock().expect("activity log lock");
         if entries.len() >= self.capacity {
             entries.pop_front();
         }
@@ -143,6 +288,16 @@ fn summary_for(kind: ActivityEventKind, metadata: Option<&ActivityMetadata>) -> 
         (ActivityEventKind::ConnectionStateChanged, None) => {
             "Connection state changed.".to_string()
         }
+        (ActivityEventKind::ActionRequested, _) => "Action requested.".to_string(),
+        (ActivityEventKind::ActionCompleted, _) => "Action completed.".to_string(),
+        (ActivityEventKind::ActionFailed, _) => "Action failed.".to_string(),
+        (ActivityEventKind::DeviceDiscovered, _) => "Device discovered.".to_string(),
+        (ActivityEventKind::DeviceRejected, _) => "Device rejected an operation.".to_string(),
+        (ActivityEventKind::ProtocolMessageRejected, _) => "Protocol message rejected.".to_string(),
+        (ActivityEventKind::ProtocolFailed, _) => "Protocol operation failed.".to_string(),
+        (ActivityEventKind::FirmwareUpdateStarted, _) => "Firmware update started.".to_string(),
+        (ActivityEventKind::FirmwareUpdateCompleted, _) => "Firmware update completed.".to_string(),
+        (ActivityEventKind::FirmwareUpdateFailed, _) => "Firmware update failed.".to_string(),
     }
 }
 
