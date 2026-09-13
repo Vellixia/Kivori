@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
 import { ConnectionStatus } from './features/connection/ConnectionStatus';
-import { Diagnostics } from './features/connection/Diagnostics';
+import { Log } from './features/connection/Log';
 import { DeviceStudio } from './features/device-studio/DeviceStudio';
 import { getAppInfo } from './lib/ipc';
 import { strings } from './lib/i18n/strings';
@@ -38,7 +38,7 @@ export function App(): ReactElement {
         <TabsList aria-label={strings.appTitle}>
           <TabsTrigger value="overview">{nav.overview}</TabsTrigger>
           {showStudio ? <TabsTrigger value="studio">{nav.studio}</TabsTrigger> : null}
-          <TabsTrigger value="diagnostics">{nav.diagnostics}</TabsTrigger>
+          <TabsTrigger value="log">{nav.log}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="pt-4">
@@ -49,8 +49,8 @@ export function App(): ReactElement {
             <DeviceStudio />
           </TabsContent>
         ) : null}
-        <TabsContent value="diagnostics" className="pt-4">
-          <Diagnostics />
+        <TabsContent value="log" className="pt-4">
+          <Log />
         </TabsContent>
       </Tabs>
     </main>

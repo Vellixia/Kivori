@@ -10,7 +10,7 @@ import type {
   AppInfoDto,
   CompanionState,
   ConnectionStatusDto,
-  DiagnosticEventDto,
+  ActivityEventDto,
   SendableState,
   AnimationTimeline,
   FirmwareStatusDto,
@@ -113,9 +113,10 @@ export async function playMascotAction(action: MascotAction): Promise<void> {
   return unavailable();
 }
 
-export async function getDiagnostics(limit: number): Promise<DiagnosticEventDto[]> {
-  if (isTauri()) return invoke<DiagnosticEventDto[]>('get_diagnostics', { limit });
-  if (import.meta.env.DEV) return (await devMock()).mockDiagnostics();
+/** Returns up to `limit` typed, safe events from this native process session. */
+export async function getActivityLog(limit: number): Promise<ActivityEventDto[]> {
+  if (isTauri()) return invoke<ActivityEventDto[]>('get_activity_log', { limit });
+  if (import.meta.env.DEV) return (await devMock()).mockActivityLog();
   return unavailable();
 }
 
@@ -163,13 +164,13 @@ export async function onConnectionStatus(
   return unavailable();
 }
 
-/** Subscribes to safe diagnostic events; resolves to an unsubscribe handle. */
-export async function onDiagnostic(
-  handler: (diagnostic: DiagnosticEventDto) => void,
+/** Subscribes to native-issued typed session-activity events. */
+export async function onActivityLog(
+  handler: (activity: ActivityEventDto) => void,
 ): Promise<Unlisten> {
   if (isTauri()) {
     const { listen } = await import('@tauri-apps/api/event');
-    return listen<DiagnosticEventDto>('diagnostics://event', (event) => handler(event.payload));
+    return listen<ActivityEventDto>('activity-log://event', (event) => handler(event.payload));
   }
   if (import.meta.env.DEV) return () => {};
   return unavailable();

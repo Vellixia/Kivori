@@ -32,8 +32,8 @@ drives the panel (constitution Principle II). A direct-dependency firewall
 
 ## Three state axes (kivori-model)
 
-- **Companion** (6): `booting, idle, happy, busy, sleeping, offline` — what the device *shows*.
-- **Sendable** (4): `idle, happy, busy, sleeping` — the subset the desktop may *command*. `booting`
+- **Companion** (6): `booting, idle, happy, busy, sleeping, offline` — what the device _shows_.
+- **Sendable** (4): `idle, happy, busy, sleeping` — the subset the desktop may _command_. `booting`
   and `offline` are device-originated and never transmitted (enforced at the type level).
 - **Connection** (5): `disconnected, connecting, connected, incompatible, error` — the desktop↔device
   link lifecycle, a pure `(state, event) → state` machine.
@@ -49,7 +49,7 @@ the decoder resyncs on the next delimiter. Messages: `Hello/HelloAck/Ready/Bye`,
 
 **IPC (native core ↔ webview — [contracts/ipc.md](../specs/001-device-connection-foundation/contracts/ipc.md)).**
 The webview may call only a fixed set of typed commands and subscribe to `connection://status` /
-`diagnostics://event`; frame bytes stream over a `Channel<ArrayBuffer>`. No raw serial, filesystem,
+`activity-log://event`; `get_activity_log` returns typed session history; frame bytes stream over a `Channel<ArrayBuffer>`. No raw serial, filesystem,
 shell, or credential surface is exposed. The canvas is a pure blit target — the RGB565→RGBA expansion
 happens in Rust so the frontend cannot diverge from device pixels.
 
@@ -89,7 +89,7 @@ a full-frame render (proven host-side), which is what lets the golden frames sta
   `embedded` feature. Host simulation adapters (`host-sim`) run the entire device core on the host.
 - **Desktop core** ([apps/desktop/src-tauri/src](../apps/desktop/src-tauri/src)): discovery (VID/PID
   filter), handshake verification, the connection manager (FSM + retry/backoff + hashed-identity
-  summary), heartbeat, the desired-state orchestrator, the window-lifecycle policy, safe diagnostics,
+  summary), heartbeat, the desired-state orchestrator, the window-lifecycle policy, typed session activity,
   and the host-side Device Studio preview renderer. These are pure/host-testable; the Tauri runtime, the
   concrete serial adapter, and the async run loop bind them together in the integration layer.
 - **Frontend** ([apps/desktop/src](../apps/desktop/src)): React + Zustand. Typed IPC wrappers with a
@@ -102,6 +102,6 @@ a full-frame render (proven host-side), which is what lets the golden frames sta
   Windows and Linux.
 - **Offline-first** ([offline-boundary.md](./offline-boundary.md)): no network client in any first-party
   crate; no remote frontend assets; USB is the only link.
-- **Least privilege + privacy** (ADR-0005, [diagnostics-and-logging.md](./diagnostics-and-logging.md)):
-  raw device identity is hashed at the transport boundary; diagnostics carry only an allowlisted, safe
+- **Least privilege + privacy** (ADR-0005, [activity-log.md](./activity-log.md)):
+  raw device identity is hashed at the transport boundary; typed session activity carries only an allowlisted, safe
   field set; raw-payload logging is a dev-only, compiled-out path.

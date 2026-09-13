@@ -53,19 +53,119 @@ export interface MascotActionAppliedDto {
   appliedAtMs: number;
 }
 
-export type DiagnosticCategory =
-  'io' | 'handshake' | 'version' | 'framing' | 'checksum' | 'timeout' | 'busy' | 'bad_payload';
+export type ActivityEventType =
+  | 'connectionAttempted'
+  | 'connectionOpened'
+  | 'handshakeStarted'
+  | 'handshakeSucceeded'
+  | 'connectionRetryScheduled'
+  | 'incompatibleFirmware'
+  | 'connectionIoFailure'
+  | 'handshakeTimedOut'
+  | 'heartbeatTimedOut'
+  | 'connectionRecovered'
+  | 'connectionDisconnected'
+  | 'connectionStateChanged'
+  | 'deviceNegotiated'
+  | 'personalityConfigured'
+  | 'selfPlayConfigured'
+  | 'stateRequested'
+  | 'mirroredStateRequested'
+  | 'manualSocialActionRequested'
+  | 'autonomousSocialActionRequested'
+  | 'socialActionApplied'
+  | 'stateSynchronized'
+  | 'deviceStateObserved'
+  | 'deviceDiagnosticFraming'
+  | 'deviceDiagnosticChecksum'
+  | 'deviceDiagnosticVersion'
+  | 'deviceDiagnosticPayload'
+  | 'deviceSequenceGap'
+  | 'deviceDisplayFault'
+  | 'deviceLinkLost'
+  | 'deviceDiagnosticUnknown'
+  | 'deviceError'
+  | 'deviceBusy'
+  | 'deviceTimedOut'
+  | 'protocolMalformedFrame'
+  | 'protocolSequenceGap'
+  | 'actionRequested'
+  | 'actionCompleted'
+  | 'actionFailed'
+  | 'deviceDiscovered'
+  | 'deviceRejected'
+  | 'protocolMessageRejected'
+  | 'protocolFailed'
+  | 'firmwareUpdateStarted'
+  | 'firmwareUpdateCompleted'
+  | 'firmwareUpdateFailed'
+  | 'firmwareAvailable'
+  | 'firmwareUnavailable'
+  | 'firmwareFlashRequested'
+  | 'firmwarePreparing'
+  | 'firmwareSerialReleased'
+  | 'firmwareFlasherStarted'
+  | 'firmwareFlashSucceeded'
+  | 'firmwareReconnectWaiting'
+  | 'firmwareReconnectTimedOut'
+  | 'firmwarePostFlashVerified'
+  | 'firmwarePreparationRejected';
 
-export interface DiagnosticEventDto {
-  at: string;
-  connection: ConnectionState;
-  category: DiagnosticCategory;
-  messageType: string | null;
-  payloadLen: number | null;
-  seq: number | null;
+export type ActivitySeverity = 'info' | 'warning' | 'error';
+export type ActivitySource = 'connection' | 'action' | 'device' | 'protocol' | 'firmware';
+export type ActivityOutcome =
+  | 'observed'
+  | 'started'
+  | 'succeeded'
+  | 'failed'
+  | 'rejected'
+  | 'retrying'
+  | 'applied'
+  | 'synchronized'
+  | 'busy'
+  | 'timedOut'
+  | 'available'
+  | 'unavailable';
+export type ActivityConnectionState = ConnectionState;
+export type ActivityDiagnosticCategory =
+  'io' | 'handshake' | 'version' | 'framing' | 'checksum' | 'timeout' | 'busy' | 'badPayload';
+export type ProtocolMalformedCategory = 'framing' | 'checksum' | 'version' | 'payload';
+
+/** Fixed activity metadata allowlist. Optional fields are omitted by Rust when unavailable. */
+export interface ActivityMetadataDto {
+  connection?: ActivityConnectionState;
   retryCount: number;
   elapsedMs: number;
-  deviceIdHashShort: string | null;
+  diagnosticCategory?: ActivityDiagnosticCategory;
+  diagnosticCode?: number;
+  firmwareVersion?: string;
+  protocolVersion?: ProtocolVersion;
+  deviceIdHashShort?: string;
+  capabilities?: number;
+  state?: SendableState;
+  personality?: MascotPersonality;
+  selfPlay?: boolean;
+  action?: MascotAction;
+  seed?: number;
+  appliedAtMs?: number;
+  autonomous?: boolean;
+  protocolCategory?: ProtocolMalformedCategory;
+  payloadLen?: number;
+  sequence?: number;
+  skipped?: number;
+  reported?: CompanionState;
+}
+
+/** One native-issued, typed and allowlisted activity event. */
+export interface ActivityEventDto {
+  id: number;
+  at: string;
+  type: ActivityEventType;
+  summary: string;
+  severity: ActivitySeverity;
+  source: ActivitySource;
+  outcome: ActivityOutcome;
+  metadata: ActivityMetadataDto | null;
 }
 
 /** Every companion state, in canonical display order. */

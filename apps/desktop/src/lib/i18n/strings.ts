@@ -7,7 +7,7 @@ export const strings = {
   navigation: {
     overview: 'Overview',
     studio: 'Device Studio',
-    diagnostics: 'Diagnostics',
+    log: 'Log',
   },
   connection: {
     heading: 'Connection',
@@ -64,21 +64,31 @@ export const strings = {
     retry: 'Retry',
     failed: 'Kivori could not play that reaction.',
   },
-  diagnostics: {
-    heading: 'Diagnostics',
-    empty: 'No diagnostics recorded yet.',
-    live: 'Connection diagnostics',
-    columns: {
-      at: 'Time',
-      category: 'Category',
-      connection: 'State',
-      detail: 'Detail',
+  log: {
+    heading: 'Log',
+    empty: 'No session activity recorded yet.',
+    noMatches: 'No session activity matches these filters.',
+    live: 'Session activity log',
+    status: {
+      starting: 'Starting activity log…',
+      live: 'Live',
+      unavailable: 'Activity log unavailable.',
     },
-    retry: 'retry',
-    seq: 'seq',
-    payloadLen: 'bytes',
-    device: 'device',
-    note: 'Diagnostics are local and redacted: no payload contents, raw device identity, or file paths.',
+    filters: {
+      label: 'Activity log filters',
+      severity: 'Severity',
+      source: 'Source',
+      all: 'All',
+    },
+    columns: {
+      time: 'Time',
+      severity: 'Severity',
+      source: 'Source',
+      event: 'Event',
+      result: 'Result',
+      details: 'Details',
+    },
+    note: 'Session activity is local and typed: no payload contents, raw device identity, file paths, or error text.',
   },
   studio: {
     heading: 'Device Studio',
