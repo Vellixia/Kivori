@@ -431,12 +431,20 @@ impl RuntimeActivityPlanner {
         SessionActivity::new(ActivityEventKind::ConnectionAttempted, None)
     }
     #[must_use]
-    pub fn failure(&mut self, kind: ActivityEventKind) -> [SessionActivity; 2] {
+    pub fn failure(
+        &mut self,
+        kind: ActivityEventKind,
+        retry_scheduled: bool,
+    ) -> Vec<SessionActivity> {
         self.pending_recovery = true;
-        [
-            SessionActivity::new(kind, None),
-            SessionActivity::new(ActivityEventKind::ConnectionRetryScheduled, None),
-        ]
+        let mut observations = vec![SessionActivity::new(kind, None)];
+        if retry_scheduled {
+            observations.push(SessionActivity::new(
+                ActivityEventKind::ConnectionRetryScheduled,
+                None,
+            ));
+        }
+        observations
     }
     pub fn recovered(&mut self) -> Option<SessionActivity> {
         self.pending_recovery.then(|| {

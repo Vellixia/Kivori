@@ -7,13 +7,16 @@ use kivori_desktop::activity::{
     ActivityEventKind, ActivityMetadata, ActivityOutcome, RuntimeActivityPlanner,
     RuntimeActivityRequest,
 };
-use kivori_desktop::device::fsm::ConnectionManager;
+use kivori_desktop::device::fsm::{ConnectionManager, ManagerEvent};
 use kivori_desktop::device::session::{Session, SessionConfig};
 use kivori_desktop::device::transport::SerialLink;
+use kivori_desktop::firmware::FlashWorkflow;
 use kivori_desktop::orchestrator::Orchestrator;
-use kivori_desktop::runtime::device_task::plan_device_request;
+use kivori_desktop::runtime::device_task::{
+    observe_connection_transition, plan_device_request, recover_link, ConnectionDeadlines,
+};
 use kivori_desktop::runtime::state::DeviceCommand;
-use kivori_model::{CompanionState, ProtocolVersion};
+use kivori_model::{CompanionState, ConnectionState, ProtocolVersion};
 use kivori_protocol::{
     encode_message, Diagnostic, ErrorCategory, MascotActionApplied, Message, PROTOCOL_MAJOR,
     PROTOCOL_MINOR,
@@ -276,7 +279,7 @@ fn planner_retains_failure_retry_and_recovery_across_intervening_states() {
         planner.attempt().kind,
         ActivityEventKind::ConnectionAttempted
     );
-    let failure = planner.failure(ActivityEventKind::HeartbeatTimedOut);
+    let failure = planner.failure(ActivityEventKind::HeartbeatTimedOut, true);
     assert_eq!(
         failure.iter().map(|entry| entry.kind).collect::<Vec<_>>(),
         [
@@ -287,6 +290,114 @@ fn planner_retains_failure_retry_and_recovery_across_intervening_states() {
     assert_eq!(
         planner.recovered().map(|entry| entry.kind),
         Some(ActivityEventKind::ConnectionRecovered)
+    );
+}
+
+#[test]
+fn production_recovery_emits_retry_only_when_it_sets_a_retry_deadline() {
+    let mut idle_planner = RuntimeActivityPlanner::new();
+    let mut idle_manager = ConnectionManager::new();
+    assert!(idle_manager.apply(ManagerEvent::PortOpened));
+    let mut idle_link = None;
+    let mut idle_port = Some("COM7".to_string());
+    let mut idle_retry = None;
+    let mut idle_deadlines = ConnectionDeadlines::new();
+    let idle_flash = FlashWorkflow::new(true, 512);
+    let mut idle_activity = Vec::new();
+
+    recover_link(
+        &mut idle_planner,
+        &mut idle_manager,
+        ManagerEvent::IoError,
+        &mut idle_link,
+        &mut idle_port,
+        &mut idle_retry,
+        &mut idle_deadlines,
+        &idle_flash,
+        |observation| idle_activity.push(observation.kind),
+    );
+
+    assert_eq!(
+        idle_activity,
+        [
+            ActivityEventKind::ConnectionIoFailure,
+            ActivityEventKind::ConnectionRetryScheduled,
+        ]
+    );
+    assert!(idle_retry.is_some());
+
+    let mut reconnect_planner = RuntimeActivityPlanner::new();
+    let mut reconnect_manager = ConnectionManager::new();
+    assert!(reconnect_manager.apply(ManagerEvent::PortOpened));
+    let mut reconnect_link = None;
+    let mut reconnect_port = Some("COM7".to_string());
+    let mut reconnect_retry = None;
+    let mut reconnect_deadlines = ConnectionDeadlines::new();
+    let mut reconnect_flash = FlashWorkflow::new(true, 512);
+    reconnect_flash.drain_activity();
+    reconnect_flash
+        .request(true, Some("COM7"), Some("deadbeef"))
+        .unwrap();
+    reconnect_flash.finish(Ok::<(), &str>(()));
+    let mut reconnect_activity = Vec::new();
+
+    recover_link(
+        &mut reconnect_planner,
+        &mut reconnect_manager,
+        ManagerEvent::IoError,
+        &mut reconnect_link,
+        &mut reconnect_port,
+        &mut reconnect_retry,
+        &mut reconnect_deadlines,
+        &reconnect_flash,
+        |observation| reconnect_activity.push(observation.kind),
+    );
+
+    assert_eq!(reconnect_activity, [ActivityEventKind::ConnectionIoFailure]);
+    assert!(reconnect_retry.is_none());
+}
+
+#[test]
+fn production_transition_adapter_keeps_recovery_pending_until_connected() {
+    let mut planner = RuntimeActivityPlanner::new();
+    let mut manager = ConnectionManager::new();
+    assert!(manager.apply(ManagerEvent::PortOpened));
+    let mut link = None;
+    let mut port = Some("COM7".to_string());
+    let mut retry = None;
+    let mut deadlines = ConnectionDeadlines::new();
+    let flash = FlashWorkflow::new(true, 512);
+    recover_link(
+        &mut planner,
+        &mut manager,
+        ManagerEvent::IoError,
+        &mut link,
+        &mut port,
+        &mut retry,
+        &mut deadlines,
+        &flash,
+        |_| {},
+    );
+
+    let mut previous = ConnectionState::Connecting;
+    let mut transition_activity = Vec::new();
+    for current in [
+        ConnectionState::Error,
+        ConnectionState::Disconnected,
+        ConnectionState::Connecting,
+        ConnectionState::Connected,
+    ] {
+        assert!(observe_connection_transition(
+            &mut planner,
+            &mut previous,
+            current,
+            |observation| transition_activity.push(observation.kind),
+        ));
+    }
+
+    assert_eq!(
+        transition_activity,
+        [ActivityEventKind::ConnectionRecovered]
     );
 }
 

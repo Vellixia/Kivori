@@ -32,7 +32,7 @@ use crate::ipc::dto::{connection_status, ConnectionStatusDto};
 use crate::ipc::events;
 use crate::orchestrator::Orchestrator;
 use crate::runtime::state::DeviceCommand;
-use kivori_model::{CompanionState, MascotPersonality};
+use kivori_model::{CompanionState, ConnectionState, MascotPersonality};
 use kivori_protocol::PlayMascotAction;
 
 const TICK: Duration = Duration::from_millis(50);
@@ -182,8 +182,6 @@ fn device_loop(
                     };
                     if write_failed {
                         recover_link(
-                            &app,
-                            &activity_log,
                             &mut activity_planner,
                             &mut manager,
                             ManagerEvent::IoError,
@@ -192,6 +190,9 @@ fn device_loop(
                             &mut retry_at,
                             &mut deadlines,
                             &flash,
+                            |observation| {
+                                record_observations(&app, &activity_log, [observation]);
+                            },
                         );
                     }
                 }
@@ -229,8 +230,6 @@ fn device_loop(
                     };
                     if write_failed {
                         recover_link(
-                            &app,
-                            &activity_log,
                             &mut activity_planner,
                             &mut manager,
                             ManagerEvent::IoError,
@@ -239,6 +238,9 @@ fn device_loop(
                             &mut retry_at,
                             &mut deadlines,
                             &flash,
+                            |observation| {
+                                record_observations(&app, &activity_log, [observation]);
+                            },
                         );
                     }
                 }
@@ -365,8 +367,6 @@ fn device_loop(
 
                 if let Some(event) = event {
                     recover_link(
-                        &app,
-                        &activity_log,
                         &mut activity_planner,
                         &mut manager,
                         event,
@@ -375,6 +375,9 @@ fn device_loop(
                         &mut retry_at,
                         &mut deadlines,
                         &flash,
+                        |observation| {
+                            record_observations(&app, &activity_log, [observation]);
+                        },
                     );
                 }
             }
@@ -422,8 +425,6 @@ fn device_loop(
             };
             if write_failed {
                 recover_link(
-                    &app,
-                    &activity_log,
                     &mut activity_planner,
                     &mut manager,
                     ManagerEvent::IoError,
@@ -432,6 +433,9 @@ fn device_loop(
                     &mut retry_at,
                     &mut deadlines,
                     &flash,
+                    |observation| {
+                        record_observations(&app, &activity_log, [observation]);
+                    },
                 );
             }
         }
@@ -454,15 +458,12 @@ fn device_loop(
         // 4. Record typed activity for every lifecycle transition (connect, incompatible,
         //    disconnect, recoverable error, reconnect attempt) — T105.
         let current_state = manager.state();
-        if current_state != previous_state {
-            if current_state == kivori_model::ConnectionState::Connected {
-                record_observations(
-                    &app,
-                    &activity_log,
-                    activity_planner.recovered().into_iter(),
-                );
-            }
-            previous_state = current_state;
+        if observe_connection_transition(
+            &mut activity_planner,
+            &mut previous_state,
+            current_state,
+            |observation| record_observations(&app, &activity_log, [observation]),
+        ) {
             record(&app, &activity_log, &manager, started);
         }
 
@@ -534,9 +535,11 @@ where
     resume
 }
 
-fn recover_link(
-    app: &AppHandle,
-    activity_log: &ActivityLog,
+/// Applies the real link-recovery state change and yields its closed activity observations.
+///
+/// Tauri recording remains in the caller, allowing host tests to exercise this exact production
+/// adapter with an absent serial link.
+pub fn recover_link(
     activity_planner: &mut RuntimeActivityPlanner,
     manager: &mut ConnectionManager,
     event: ManagerEvent,
@@ -545,12 +548,9 @@ fn recover_link(
     retry_at: &mut Option<Instant>,
     deadlines: &mut ConnectionDeadlines,
     flash: &FlashWorkflow,
+    observe: impl FnMut(SessionActivity),
 ) {
-    record_observations(
-        app,
-        activity_log,
-        activity_planner.failure(connection_event_kind(&event)),
-    );
+    let failure_kind = connection_event_kind(&event);
     manager.apply(event);
     *link = None;
     *connected_port = None;
@@ -561,6 +561,30 @@ fn recover_link(
         let backoff = base_delay_ms(manager.retry_count());
         *retry_at = Some(Instant::now() + Duration::from_millis(backoff));
     }
+    activity_planner
+        .failure(failure_kind, retry_at.is_some())
+        .into_iter()
+        .for_each(observe);
+}
+
+/// Observes the exact lifecycle transition used by the device loop.
+///
+/// Recovery stays pending through intermediate states and is emitted only when the new state is
+/// connected. The return value tells the caller whether it must record the manager snapshot.
+pub fn observe_connection_transition(
+    activity_planner: &mut RuntimeActivityPlanner,
+    previous_state: &mut ConnectionState,
+    current_state: ConnectionState,
+    observe: impl FnMut(SessionActivity),
+) -> bool {
+    if current_state == *previous_state {
+        return false;
+    }
+    if current_state == ConnectionState::Connected {
+        activity_planner.recovered().into_iter().for_each(observe);
+    }
+    *previous_state = current_state;
+    true
 }
 
 fn publish_firmware_status(status: &Mutex<FirmwareStatus>, workflow: &FlashWorkflow) {
