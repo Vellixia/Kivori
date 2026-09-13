@@ -22,6 +22,8 @@ use crate::window_lifecycle::WindowLifecycle;
 pub enum DeviceCommand {
     /// Set the desired sendable state; transmitted to the device when connected (FR-012).
     SetDesired(SendableState),
+    /// Dev-only state request, kept distinct in native activity even though its wire state is identical.
+    MirrorDesired(SendableState),
     /// Change desktop-owned mascot personality and autonomous-play preference.
     ConfigureCompanion {
         /// Selected movement temperament.

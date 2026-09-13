@@ -15,8 +15,38 @@ static NEXT_ACTIVITY_ID: AtomicU64 = AtomicU64::new(1);
 /// The closed set of native activity event kinds currently emitted by the desktop core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityEventKind {
+    ConnectionOpened,
+    HandshakeStarted,
+    HandshakeSucceeded,
+    ConnectionRetryScheduled,
+    IncompatibleFirmware,
+    ConnectionIoFailure,
+    HandshakeTimedOut,
+    HeartbeatTimedOut,
+    ConnectionRecovered,
+    ConnectionDisconnected,
     /// The device connection manager entered a new lifecycle state.
     ConnectionStateChanged,
+    DeviceNegotiated,
+    PersonalityConfigured,
+    SelfPlayConfigured,
+    StateRequested,
+    MirroredStateRequested,
+    ManualSocialActionRequested,
+    AutonomousSocialActionRequested,
+    SocialActionApplied,
+    StateSynchronized,
+    DeviceDiagnosticFraming,
+    DeviceDiagnosticChecksum,
+    DeviceDiagnosticVersion,
+    DeviceDiagnosticPayload,
+    DeviceSequenceGap,
+    DeviceDisplayFault,
+    DeviceLinkLost,
+    DeviceDiagnosticUnknown,
+    DeviceError,
+    ProtocolMalformedFrame,
+    ProtocolSequenceGap,
     /// A desktop-owned mascot action was requested.
     ActionRequested,
     /// A mascot action completed successfully.
@@ -37,6 +67,16 @@ pub enum ActivityEventKind {
     FirmwareUpdateCompleted,
     /// A firmware update failed.
     FirmwareUpdateFailed,
+    FirmwareAvailable,
+    FirmwareUnavailable,
+    FirmwareFlashRequested,
+    FirmwarePreparing,
+    FirmwareSerialReleased,
+    FirmwareFlasherStarted,
+    FirmwareFlashSucceeded,
+    FirmwareReconnectWaiting,
+    FirmwareReconnectTimedOut,
+    FirmwarePostFlashVerified,
 }
 
 /// Closed severity vocabulary for native activity.
@@ -65,6 +105,13 @@ pub enum ActivityOutcome {
     Succeeded,
     Failed,
     Rejected,
+    Retrying,
+    Applied,
+    Synchronized,
+    Busy,
+    TimedOut,
+    Available,
+    Unavailable,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -77,10 +124,87 @@ struct ActivityClassification {
 impl ActivityEventKind {
     const fn classification(self) -> ActivityClassification {
         match self {
+            Self::ConnectionOpened | Self::HandshakeStarted => ActivityClassification {
+                severity: ActivitySeverity::Info,
+                source: ActivitySource::Connection,
+                outcome: ActivityOutcome::Started,
+            },
+            Self::HandshakeSucceeded | Self::ConnectionRecovered => ActivityClassification {
+                severity: ActivitySeverity::Info,
+                source: ActivitySource::Connection,
+                outcome: ActivityOutcome::Succeeded,
+            },
+            Self::ConnectionRetryScheduled => ActivityClassification {
+                severity: ActivitySeverity::Warning,
+                source: ActivitySource::Connection,
+                outcome: ActivityOutcome::Retrying,
+            },
+            Self::IncompatibleFirmware => ActivityClassification {
+                severity: ActivitySeverity::Warning,
+                source: ActivitySource::Connection,
+                outcome: ActivityOutcome::Rejected,
+            },
+            Self::ConnectionIoFailure | Self::ConnectionDisconnected => ActivityClassification {
+                severity: ActivitySeverity::Error,
+                source: ActivitySource::Connection,
+                outcome: ActivityOutcome::Failed,
+            },
+            Self::HandshakeTimedOut | Self::HeartbeatTimedOut => ActivityClassification {
+                severity: ActivitySeverity::Error,
+                source: ActivitySource::Connection,
+                outcome: ActivityOutcome::TimedOut,
+            },
             Self::ConnectionStateChanged => ActivityClassification {
                 severity: ActivitySeverity::Info,
                 source: ActivitySource::Connection,
                 outcome: ActivityOutcome::Observed,
+            },
+            Self::DeviceNegotiated => ActivityClassification {
+                severity: ActivitySeverity::Info,
+                source: ActivitySource::Device,
+                outcome: ActivityOutcome::Succeeded,
+            },
+            Self::PersonalityConfigured
+            | Self::SelfPlayConfigured
+            | Self::StateRequested
+            | Self::MirroredStateRequested
+            | Self::ManualSocialActionRequested
+            | Self::AutonomousSocialActionRequested => ActivityClassification {
+                severity: ActivitySeverity::Info,
+                source: ActivitySource::Action,
+                outcome: ActivityOutcome::Started,
+            },
+            Self::SocialActionApplied => ActivityClassification {
+                severity: ActivitySeverity::Info,
+                source: ActivitySource::Device,
+                outcome: ActivityOutcome::Applied,
+            },
+            Self::StateSynchronized => ActivityClassification {
+                severity: ActivitySeverity::Info,
+                source: ActivitySource::Device,
+                outcome: ActivityOutcome::Synchronized,
+            },
+            Self::DeviceDiagnosticFraming
+            | Self::DeviceDiagnosticChecksum
+            | Self::DeviceDiagnosticVersion
+            | Self::DeviceDiagnosticPayload
+            | Self::DeviceSequenceGap
+            | Self::DeviceDisplayFault
+            | Self::DeviceLinkLost
+            | Self::DeviceDiagnosticUnknown => ActivityClassification {
+                severity: ActivitySeverity::Warning,
+                source: ActivitySource::Device,
+                outcome: ActivityOutcome::Observed,
+            },
+            Self::DeviceError => ActivityClassification {
+                severity: ActivitySeverity::Warning,
+                source: ActivitySource::Device,
+                outcome: ActivityOutcome::Rejected,
+            },
+            Self::ProtocolMalformedFrame | Self::ProtocolSequenceGap => ActivityClassification {
+                severity: ActivitySeverity::Warning,
+                source: ActivitySource::Protocol,
+                outcome: ActivityOutcome::Rejected,
             },
             Self::ActionRequested => ActivityClassification {
                 severity: ActivitySeverity::Info,
@@ -132,6 +256,37 @@ impl ActivityEventKind {
                 source: ActivitySource::Firmware,
                 outcome: ActivityOutcome::Failed,
             },
+            Self::FirmwareAvailable => ActivityClassification {
+                severity: ActivitySeverity::Info,
+                source: ActivitySource::Firmware,
+                outcome: ActivityOutcome::Available,
+            },
+            Self::FirmwareUnavailable => ActivityClassification {
+                severity: ActivitySeverity::Warning,
+                source: ActivitySource::Firmware,
+                outcome: ActivityOutcome::Unavailable,
+            },
+            Self::FirmwareFlashRequested
+            | Self::FirmwarePreparing
+            | Self::FirmwareSerialReleased
+            | Self::FirmwareFlasherStarted
+            | Self::FirmwareReconnectWaiting => ActivityClassification {
+                severity: ActivitySeverity::Info,
+                source: ActivitySource::Firmware,
+                outcome: ActivityOutcome::Started,
+            },
+            Self::FirmwareFlashSucceeded | Self::FirmwarePostFlashVerified => {
+                ActivityClassification {
+                    severity: ActivitySeverity::Info,
+                    source: ActivitySource::Firmware,
+                    outcome: ActivityOutcome::Succeeded,
+                }
+            }
+            Self::FirmwareReconnectTimedOut => ActivityClassification {
+                severity: ActivitySeverity::Error,
+                source: ActivitySource::Firmware,
+                outcome: ActivityOutcome::TimedOut,
+            },
         }
     }
 }
@@ -148,6 +303,40 @@ pub enum ActivityMetadata {
         /// Monotonic elapsed time since the device task started.
         elapsed_ms: u32,
     },
+    /// Safe device diagnostic category and stable firmware code.
+    DeviceDiagnostic {
+        category: kivori_protocol::ErrorCategory,
+        code: u16,
+    },
+    /// Safe identity and compatibility facts established by a successful handshake.
+    Negotiated {
+        firmware_major: u16,
+        firmware_minor: u16,
+        firmware_patch: u16,
+        protocol_major: u16,
+        protocol_minor: u16,
+        device_id_hash_short: String,
+        capabilities: u32,
+    },
+}
+
+/// A closed observation produced by the synchronous session parser.
+///
+/// The device task drains this queue and remains the sole recorder and Tauri-emission owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionActivity {
+    /// Closed activity kind.
+    pub kind: ActivityEventKind,
+    /// Optional, typed safe metadata.
+    pub metadata: Option<ActivityMetadata>,
+}
+
+impl SessionActivity {
+    /// Creates a closed session observation.
+    #[must_use]
+    pub const fn new(kind: ActivityEventKind, metadata: Option<ActivityMetadata>) -> Self {
+        Self { kind, metadata }
+    }
 }
 
 /// One session activity record with a process-monotonic identifier.
@@ -288,6 +477,59 @@ fn summary_for(kind: ActivityEventKind, metadata: Option<&ActivityMetadata>) -> 
         (ActivityEventKind::ConnectionStateChanged, None) => {
             "Connection state changed.".to_string()
         }
+        (ActivityEventKind::ConnectionStateChanged, Some(_)) => {
+            "Connection state changed.".to_string()
+        }
+        (ActivityEventKind::ConnectionOpened, _) => "Connection opened.".to_string(),
+        (ActivityEventKind::HandshakeStarted, _) => "Handshake started.".to_string(),
+        (ActivityEventKind::HandshakeSucceeded, _) => "Handshake succeeded.".to_string(),
+        (ActivityEventKind::ConnectionRetryScheduled, _) => {
+            "Connection retry scheduled.".to_string()
+        }
+        (ActivityEventKind::IncompatibleFirmware, _) => "Incompatible firmware.".to_string(),
+        (ActivityEventKind::ConnectionIoFailure, _) => "Connection I/O failed.".to_string(),
+        (ActivityEventKind::HandshakeTimedOut, _) => "Handshake timed out.".to_string(),
+        (ActivityEventKind::HeartbeatTimedOut, _) => "Heartbeat timed out.".to_string(),
+        (ActivityEventKind::ConnectionRecovered, _) => "Connection recovered.".to_string(),
+        (ActivityEventKind::ConnectionDisconnected, _) => "Connection disconnected.".to_string(),
+        (ActivityEventKind::DeviceNegotiated, _) => "Device negotiated.".to_string(),
+        (ActivityEventKind::PersonalityConfigured, _) => "Personality configured.".to_string(),
+        (ActivityEventKind::SelfPlayConfigured, _) => "Self-play configured.".to_string(),
+        (ActivityEventKind::StateRequested, _) => "State requested.".to_string(),
+        (ActivityEventKind::MirroredStateRequested, _) => "Mirrored state requested.".to_string(),
+        (ActivityEventKind::ManualSocialActionRequested, _) => {
+            "Social reaction requested.".to_string()
+        }
+        (ActivityEventKind::AutonomousSocialActionRequested, _) => {
+            "Autonomous social reaction requested.".to_string()
+        }
+        (ActivityEventKind::SocialActionApplied, _) => "Social reaction applied.".to_string(),
+        (ActivityEventKind::StateSynchronized, _) => "Device state synchronized.".to_string(),
+        (ActivityEventKind::DeviceDiagnosticFraming, _) => {
+            "Device rejected a framing error.".to_string()
+        }
+        (ActivityEventKind::DeviceDiagnosticChecksum, _) => {
+            "Device rejected a checksum error.".to_string()
+        }
+        (ActivityEventKind::DeviceDiagnosticVersion, _) => {
+            "Device rejected a version error.".to_string()
+        }
+        (ActivityEventKind::DeviceDiagnosticPayload, _) => {
+            "Device rejected a payload error.".to_string()
+        }
+        (ActivityEventKind::DeviceSequenceGap, _) => "Device observed a sequence gap.".to_string(),
+        (ActivityEventKind::DeviceDisplayFault, _) => "Device display fault observed.".to_string(),
+        (ActivityEventKind::DeviceLinkLost, _) => "Device link loss observed.".to_string(),
+        (ActivityEventKind::DeviceDiagnosticUnknown, _) => {
+            "Device diagnostic observed.".to_string()
+        }
+        (ActivityEventKind::DeviceError, _) => "Device rejected an operation.".to_string(),
+        (ActivityEventKind::ProtocolMalformedFrame, _) => {
+            "Malformed protocol frame dropped.".to_string()
+        }
+        (ActivityEventKind::ProtocolSequenceGap, _) => {
+            "Protocol sequence gap observed.".to_string()
+        }
         (ActivityEventKind::ActionRequested, _) => "Action requested.".to_string(),
         (ActivityEventKind::ActionCompleted, _) => "Action completed.".to_string(),
         (ActivityEventKind::ActionFailed, _) => "Action failed.".to_string(),
@@ -298,6 +540,28 @@ fn summary_for(kind: ActivityEventKind, metadata: Option<&ActivityMetadata>) -> 
         (ActivityEventKind::FirmwareUpdateStarted, _) => "Firmware update started.".to_string(),
         (ActivityEventKind::FirmwareUpdateCompleted, _) => "Firmware update completed.".to_string(),
         (ActivityEventKind::FirmwareUpdateFailed, _) => "Firmware update failed.".to_string(),
+        (ActivityEventKind::FirmwareAvailable, _) => "Bundled firmware is available.".to_string(),
+        (ActivityEventKind::FirmwareUnavailable, _) => {
+            "Bundled firmware is unavailable.".to_string()
+        }
+        (ActivityEventKind::FirmwareFlashRequested, _) => "Firmware flash requested.".to_string(),
+        (ActivityEventKind::FirmwarePreparing, _) => "Preparing firmware update.".to_string(),
+        (ActivityEventKind::FirmwareSerialReleased, _) => {
+            "Serial connection released for firmware update.".to_string()
+        }
+        (ActivityEventKind::FirmwareFlasherStarted, _) => "Firmware flasher started.".to_string(),
+        (ActivityEventKind::FirmwareFlashSucceeded, _) => {
+            "Firmware flashed successfully.".to_string()
+        }
+        (ActivityEventKind::FirmwareReconnectWaiting, _) => {
+            "Waiting for firmware reconnect.".to_string()
+        }
+        (ActivityEventKind::FirmwareReconnectTimedOut, _) => {
+            "Firmware reconnect timed out.".to_string()
+        }
+        (ActivityEventKind::FirmwarePostFlashVerified, _) => {
+            "Firmware update verified.".to_string()
+        }
     }
 }
 

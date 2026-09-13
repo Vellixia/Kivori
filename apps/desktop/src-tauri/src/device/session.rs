@@ -7,7 +7,8 @@
 //! fully host-testable against an in-memory link (and, in the E2E harness, against the real firmware
 //! dispatcher). Malformed inbound frames are dropped without panicking (SC-008).
 
-use crate::device::connection::{build_hello, summarize};
+use crate::activity::{ActivityEventKind, ActivityMetadata, SessionActivity};
+use crate::device::connection::{build_hello, hash_device_id_short, summarize};
 use crate::device::fsm::{ConnectionManager, ManagerEvent};
 use crate::device::heartbeat::HeartbeatMonitor;
 use crate::device::transport::SerialLink;
@@ -71,6 +72,7 @@ pub struct Session {
     negotiated_caps: Capabilities,
     last_mascot_action_applied: Option<MascotActionApplied>,
     connection_generation: u32,
+    activity: Vec<SessionActivity>,
 }
 
 impl Session {
@@ -89,6 +91,7 @@ impl Session {
             negotiated_caps: Capabilities::NONE,
             last_mascot_action_applied: None,
             connection_generation: 0,
+            activity: Vec::new(),
         }
     }
 
@@ -109,11 +112,15 @@ impl Session {
         self.reported = None;
         self.negotiated_caps = Capabilities::NONE;
         self.last_mascot_action_applied = None;
+        self.activity.clear();
         let nonce = self.next_nonce;
         self.next_nonce = self.next_nonce.wrapping_add(1);
         let hello = build_hello(self.config.app_version, self.config.capabilities, nonce);
         self.sent_hello = Some(hello);
-        self.send(link, &Message::Hello(hello))
+        self.send(link, &Message::Hello(hello))?;
+        self.observe(ActivityEventKind::ConnectionOpened, None);
+        self.observe(ActivityEventKind::HandshakeStarted, None);
+        Ok(())
     }
 
     /// The device's most recently reported companion state (`None` until the first `StateReport`).
@@ -139,6 +146,13 @@ impl Session {
     #[must_use]
     pub const fn connection_generation(&self) -> u32 {
         self.connection_generation
+    }
+
+    /// Drains observations created while parsing safe session events.
+    ///
+    /// Recording and Tauri emission remain owned by the device task.
+    pub fn drain_activity(&mut self) -> Vec<SessionActivity> {
+        std::mem::take(&mut self.activity)
     }
 
     /// Reads and handles all currently-available inbound frames, driving `manager`/`orchestrator` and
@@ -235,8 +249,10 @@ impl Session {
         let mut scratch: heapless::Vec<u8, MAX_FRAME> = heapless::Vec::new();
         match decode_message(packet, &mut scratch, &self.config.supported_majors) {
             Ok((header, message)) => {
-                if matches!(self.inbound.classify(header.seq), SeqClass::Duplicate) {
-                    return Ok(());
+                match self.inbound.classify(header.seq) {
+                    SeqClass::Duplicate => return Ok(()),
+                    SeqClass::Gap(_) => self.observe(ActivityEventKind::ProtocolSequenceGap, None),
+                    SeqClass::First | SeqClass::Ok => {}
                 }
                 self.handle_message(header.version, message, link, manager, orchestrator)?;
             }
@@ -249,6 +265,7 @@ impl Session {
                     if manager.apply(ManagerEvent::HandshakeIncompatible {
                         device_major: header.version.major,
                     }) {
+                        self.observe(ActivityEventKind::IncompatibleFirmware, None);
                         self.send(
                             link,
                             &Message::Bye(Bye {
@@ -258,7 +275,7 @@ impl Session {
                     }
                 }
             }
-            Err(_) => {} // malformed — drop, never panic (SC-008)
+            Err(_) => self.observe(ActivityEventKind::ProtocolMalformedFrame, None),
         }
         Ok(())
     }
@@ -286,6 +303,19 @@ impl Session {
                     HandshakeOutcome::Compatible(ready) => {
                         manager.apply(ManagerEvent::HandshakeOk(summarize(&ack, device_version)));
                         self.negotiated_caps = ready.negotiated_caps;
+                        self.observe(ActivityEventKind::HandshakeSucceeded, None);
+                        self.observe(
+                            ActivityEventKind::DeviceNegotiated,
+                            Some(ActivityMetadata::Negotiated {
+                                firmware_major: ack.firmware_version.major,
+                                firmware_minor: ack.firmware_version.minor,
+                                firmware_patch: ack.firmware_version.patch,
+                                protocol_major: device_version.major,
+                                protocol_minor: device_version.minor,
+                                device_id_hash_short: hash_device_id_short(&ack.device_id),
+                                capabilities: ready.negotiated_caps.bits(),
+                            }),
+                        );
                         self.send(link, &Message::Ready(ready))?;
                         // Resynchronize the device to our desired state on (re)connect (FR-009).
                         let desired = orchestrator.resync_state();
@@ -293,6 +323,7 @@ impl Session {
                     }
                     HandshakeOutcome::Incompatible { device_major } => {
                         if manager.apply(ManagerEvent::HandshakeIncompatible { device_major }) {
+                            self.observe(ActivityEventKind::IncompatibleFirmware, None);
                             self.send(
                                 link,
                                 &Message::Bye(Bye {
@@ -304,14 +335,35 @@ impl Session {
                     HandshakeOutcome::BadNonce => {
                         // Identity not confirmed — treat as a failed handshake.
                         manager.apply(ManagerEvent::HandshakeTimeout);
+                        self.observe(ActivityEventKind::HandshakeTimedOut, None);
                     }
                 }
             }
             Message::Pong(_) => self.heartbeat.on_pong(),
-            Message::StateReport(report) => self.reported = Some(report.reported),
+            Message::StateReport(report) => {
+                if self.reported != Some(report.reported) {
+                    self.reported = Some(report.reported);
+                    self.observe(ActivityEventKind::StateSynchronized, None);
+                }
+            }
             Message::MascotActionApplied(applied) => {
                 self.last_mascot_action_applied = Some(applied);
+                self.observe(ActivityEventKind::SocialActionApplied, None);
             }
+            Message::Diagnostic(diagnostic) => self.observe(
+                device_diagnostic_kind(diagnostic.code),
+                Some(ActivityMetadata::DeviceDiagnostic {
+                    category: diagnostic.category,
+                    code: diagnostic.code,
+                }),
+            ),
+            Message::Error(error) => self.observe(
+                ActivityEventKind::DeviceError,
+                Some(ActivityMetadata::DeviceDiagnostic {
+                    category: error.category,
+                    code: error.code,
+                }),
+            ),
             // `Ready` and the remaining device→desktop kinds are observed by the UI layer, not here.
             _ => {}
         }
@@ -369,5 +421,22 @@ impl Session {
             }
             self.rx.extend_from_slice(&chunk[..n]);
         }
+    }
+
+    fn observe(&mut self, kind: ActivityEventKind, metadata: Option<ActivityMetadata>) {
+        self.activity.push(SessionActivity::new(kind, metadata));
+    }
+}
+
+fn device_diagnostic_kind(code: u16) -> ActivityEventKind {
+    match code {
+        1 => ActivityEventKind::DeviceDiagnosticFraming,
+        2 => ActivityEventKind::DeviceDiagnosticChecksum,
+        3 => ActivityEventKind::DeviceDiagnosticVersion,
+        4 => ActivityEventKind::DeviceDiagnosticPayload,
+        5 => ActivityEventKind::DeviceSequenceGap,
+        6 => ActivityEventKind::DeviceDisplayFault,
+        7 => ActivityEventKind::DeviceLinkLost,
+        _ => ActivityEventKind::DeviceDiagnosticUnknown,
     }
 }

@@ -134,6 +134,15 @@ fn device_loop(
         firmware::BUNDLED_FIRMWARE.len() as u64,
     );
     publish_firmware_status(&firmware_status, &flash);
+    record_kind(
+        &app,
+        &activity_log,
+        if flash.status().available {
+            ActivityEventKind::FirmwareAvailable
+        } else {
+            ActivityEventKind::FirmwareUnavailable
+        },
+    );
     let started = Instant::now();
 
     let mut last = connection_status(
@@ -152,12 +161,26 @@ fn device_loop(
     while !cancel.load(Ordering::SeqCst) {
         // 1. Apply queued UI commands.
         while let Ok(command) = commands.try_recv() {
+            let requested_activity = match &command {
+                DeviceCommand::SetDesired(_) => Some(ActivityEventKind::StateRequested),
+                DeviceCommand::MirrorDesired(_) => Some(ActivityEventKind::MirroredStateRequested),
+                DeviceCommand::PlayMascotAction(_) => {
+                    Some(ActivityEventKind::ManualSocialActionRequested)
+                }
+                DeviceCommand::FlashFirmware => Some(ActivityEventKind::FirmwareFlashRequested),
+                DeviceCommand::ConfigureCompanion { .. } | DeviceCommand::Refresh => None,
+            };
+            if let Some(kind) = requested_activity {
+                record_kind(&app, &activity_log, kind);
+            }
             match command {
-                DeviceCommand::SetDesired(_) if flash.is_busy() => {
+                DeviceCommand::SetDesired(_) | DeviceCommand::MirrorDesired(_)
+                    if flash.is_busy() =>
+                {
                     // The public command rejects new changes while busy; discard anything queued just
                     // before the device thread reserved the serial session.
                 }
-                DeviceCommand::SetDesired(state) => {
+                DeviceCommand::SetDesired(state) | DeviceCommand::MirrorDesired(state) => {
                     let write_failed = match link.as_mut() {
                         Some(open_link) => session
                             .set_desired(open_link, &manager, &mut orchestrator, state)
@@ -186,6 +209,12 @@ fn device_loop(
                     let now = elapsed_ms(started.elapsed());
                     companion.set_personality(personality, now);
                     companion.set_self_play(self_play, now);
+                    record_kind(
+                        &app,
+                        &activity_log,
+                        ActivityEventKind::PersonalityConfigured,
+                    );
+                    record_kind(&app, &activity_log, ActivityEventKind::SelfPlayConfigured);
                 }
                 DeviceCommand::PlayMascotAction(_) if flash.is_busy() => {}
                 DeviceCommand::PlayMascotAction(action) => {
@@ -230,22 +259,47 @@ fn device_loop(
                         publish_firmware_status(&firmware_status, &flash);
                         continue;
                     };
+                    record_kind(&app, &activity_log, ActivityEventKind::FirmwarePreparing);
                     publish_firmware_status(&firmware_status, &flash);
 
                     // This drop closes the serial handle before `espflash` opens the same port.
                     link = None;
                     connected_port = None;
+                    record_kind(
+                        &app,
+                        &activity_log,
+                        ActivityEventKind::FirmwareSerialReleased,
+                    );
                     deadlines.on_link_lost();
                     manager.apply(ManagerEvent::PortRemoved);
                     flash.mark_flashing();
+                    record_kind(
+                        &app,
+                        &activity_log,
+                        ActivityEventKind::FirmwareFlasherStarted,
+                    );
                     publish_firmware_status(&firmware_status, &flash);
 
                     let resume = flash.finish(firmware::flash_bundled(&port, &cancel));
+                    record_kind(
+                        &app,
+                        &activity_log,
+                        if matches!(resume, ResumeTarget::Discovery) {
+                            ActivityEventKind::FirmwareUpdateFailed
+                        } else {
+                            ActivityEventKind::FirmwareFlashSucceeded
+                        },
+                    );
                     publish_firmware_status(&firmware_status, &flash);
                     retry_at = None;
                     match resume {
                         ResumeTarget::Discovery => reconnect_deadline = None,
                         ResumeTarget::SamePort(_) => {
+                            record_kind(
+                                &app,
+                                &activity_log,
+                                ActivityEventKind::FirmwareReconnectWaiting,
+                            );
                             reconnect_deadline = Some(Instant::now() + firmware::RECONNECT_TIMEOUT);
                         }
                     }
@@ -261,6 +315,11 @@ fn device_loop(
             deadlines.on_link_lost();
             manager.apply(ManagerEvent::PortRemoved);
             flash.reconnect_timed_out();
+            record_kind(
+                &app,
+                &activity_log,
+                ActivityEventKind::FirmwareReconnectTimedOut,
+            );
             publish_firmware_status(&firmware_status, &flash);
             reconnect_deadline = None;
             retry_at = None;
@@ -322,6 +381,7 @@ fn device_loop(
                 };
 
                 if let Some(event) = event {
+                    record_kind(&app, &activity_log, connection_event_kind(&event));
                     recover_link(
                         &mut manager,
                         event,
@@ -335,11 +395,18 @@ fn device_loop(
             }
         }
 
+        drain_session_activity(&app, &activity_log, &mut session);
+
         if flash.status().phase == crate::firmware::FirmwarePhase::Reconnecting
             && manager.state().can_drive_device()
         {
             if let (Some(port), Some(device)) = (connected_port.as_deref(), manager.device()) {
                 if flash.handshake(port, &device.device_id_hash_short, true) {
+                    record_kind(
+                        &app,
+                        &activity_log,
+                        ActivityEventKind::FirmwarePostFlashVerified,
+                    );
                     publish_firmware_status(&firmware_status, &flash);
                     reconnect_deadline = None;
                 }
@@ -356,6 +423,11 @@ fn device_loop(
             CompanionState::Offline
         };
         if let Some(cue) = companion.poll(elapsed_ms(started.elapsed()), companion_state) {
+            record_kind(
+                &app,
+                &activity_log,
+                ActivityEventKind::AutonomousSocialActionRequested,
+            );
             let write_failed = match link.as_mut() {
                 Some(open_link) => session
                     .play_mascot_action(open_link, &manager, cue.action, cue.personality, cue.seed)
@@ -394,6 +466,11 @@ fn device_loop(
         //    disconnect, recoverable error, reconnect attempt) — T105.
         let current_state = manager.state();
         if current_state != previous_state {
+            if current_state == kivori_model::ConnectionState::Connected
+                && previous_state == kivori_model::ConnectionState::Error
+            {
+                record_kind(&app, &activity_log, ActivityEventKind::ConnectionRecovered);
+            }
             previous_state = current_state;
             record(&app, &activity_log, &manager, started);
         }
@@ -455,4 +532,30 @@ fn record(
         }),
     );
     events::emit_activity_log(app, &event);
+}
+
+fn drain_session_activity(app: &AppHandle, activity_log: &ActivityLog, session: &mut Session) {
+    for observation in session.drain_activity() {
+        let event = activity_log.record(observation.kind, observation.metadata);
+        events::emit_activity_log(app, &event);
+    }
+}
+
+fn record_kind(app: &AppHandle, activity_log: &ActivityLog, kind: ActivityEventKind) {
+    let event = activity_log.record(kind, None);
+    events::emit_activity_log(app, &event);
+}
+
+fn connection_event_kind(event: &ManagerEvent) -> ActivityEventKind {
+    match event {
+        ManagerEvent::IoError => ActivityEventKind::ConnectionIoFailure,
+        ManagerEvent::HandshakeTimeout => ActivityEventKind::HandshakeTimedOut,
+        ManagerEvent::HeartbeatTimeout => ActivityEventKind::HeartbeatTimedOut,
+        ManagerEvent::PortRemoved => ActivityEventKind::ConnectionDisconnected,
+        ManagerEvent::BackoffElapsed => ActivityEventKind::ConnectionRetryScheduled,
+        ManagerEvent::PortOpened | ManagerEvent::HandshakeOk(_) => {
+            ActivityEventKind::ConnectionOpened
+        }
+        ManagerEvent::HandshakeIncompatible { .. } => ActivityEventKind::IncompatibleFirmware,
+    }
 }

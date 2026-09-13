@@ -180,19 +180,64 @@ pub struct ActivityEventDto {
 #[serde(rename_all = "camelCase")]
 pub struct ActivityMetadataDto {
     /// Connection state for a lifecycle transition.
-    pub connection: ActivityConnectionStateDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ActivityConnectionStateDto>,
     /// Consecutive reconnect attempts.
     pub retry_count: u32,
     /// Monotonic elapsed-ms marker.
     pub elapsed_ms: u32,
+    /// Safe device diagnostic category, when the event originated on the device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic_category: Option<ActivityDiagnosticCategoryDto>,
+    /// Stable, safe device diagnostic code, when supplied by the device protocol.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic_code: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub firmware_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol_version: Option<ProtocolVersionDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_id_hash_short: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<u32>,
 }
 
 /// Closed activity-event type token serialized to the webview.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ActivityEventTypeDto {
+    ConnectionOpened,
+    HandshakeStarted,
+    HandshakeSucceeded,
+    ConnectionRetryScheduled,
+    IncompatibleFirmware,
+    ConnectionIoFailure,
+    HandshakeTimedOut,
+    HeartbeatTimedOut,
+    ConnectionRecovered,
+    ConnectionDisconnected,
     /// A device connection lifecycle state changed.
     ConnectionStateChanged,
+    DeviceNegotiated,
+    PersonalityConfigured,
+    SelfPlayConfigured,
+    StateRequested,
+    MirroredStateRequested,
+    ManualSocialActionRequested,
+    AutonomousSocialActionRequested,
+    SocialActionApplied,
+    StateSynchronized,
+    DeviceDiagnosticFraming,
+    DeviceDiagnosticChecksum,
+    DeviceDiagnosticVersion,
+    DeviceDiagnosticPayload,
+    DeviceSequenceGap,
+    DeviceDisplayFault,
+    DeviceLinkLost,
+    DeviceDiagnosticUnknown,
+    DeviceError,
+    ProtocolMalformedFrame,
+    ProtocolSequenceGap,
     ActionRequested,
     ActionCompleted,
     ActionFailed,
@@ -203,6 +248,16 @@ pub enum ActivityEventTypeDto {
     FirmwareUpdateStarted,
     FirmwareUpdateCompleted,
     FirmwareUpdateFailed,
+    FirmwareAvailable,
+    FirmwareUnavailable,
+    FirmwareFlashRequested,
+    FirmwarePreparing,
+    FirmwareSerialReleased,
+    FirmwareFlasherStarted,
+    FirmwareFlashSucceeded,
+    FirmwareReconnectWaiting,
+    FirmwareReconnectTimedOut,
+    FirmwarePostFlashVerified,
 }
 
 /// Closed connection-state token serialized in activity metadata.
@@ -245,6 +300,27 @@ pub enum ActivityOutcomeDto {
     Succeeded,
     Failed,
     Rejected,
+    Retrying,
+    Applied,
+    Synchronized,
+    Busy,
+    TimedOut,
+    Available,
+    Unavailable,
+}
+
+/// Closed safe diagnostic categories projected from the wire protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActivityDiagnosticCategoryDto {
+    Io,
+    Handshake,
+    Version,
+    Framing,
+    Checksum,
+    Timeout,
+    Busy,
+    BadPayload,
 }
 
 /// Projects application info. `device_studio_enabled` reflects the compiled-in Device Studio feature.
@@ -316,7 +392,45 @@ pub fn activity_event(event: &ActivityEvent) -> ActivityEventDto {
 
 fn activity_kind_token(kind: ActivityEventKind) -> ActivityEventTypeDto {
     match kind {
+        ActivityEventKind::ConnectionOpened => ActivityEventTypeDto::ConnectionOpened,
+        ActivityEventKind::HandshakeStarted => ActivityEventTypeDto::HandshakeStarted,
+        ActivityEventKind::HandshakeSucceeded => ActivityEventTypeDto::HandshakeSucceeded,
+        ActivityEventKind::ConnectionRetryScheduled => {
+            ActivityEventTypeDto::ConnectionRetryScheduled
+        }
+        ActivityEventKind::IncompatibleFirmware => ActivityEventTypeDto::IncompatibleFirmware,
+        ActivityEventKind::ConnectionIoFailure => ActivityEventTypeDto::ConnectionIoFailure,
+        ActivityEventKind::HandshakeTimedOut => ActivityEventTypeDto::HandshakeTimedOut,
+        ActivityEventKind::HeartbeatTimedOut => ActivityEventTypeDto::HeartbeatTimedOut,
+        ActivityEventKind::ConnectionRecovered => ActivityEventTypeDto::ConnectionRecovered,
+        ActivityEventKind::ConnectionDisconnected => ActivityEventTypeDto::ConnectionDisconnected,
         ActivityEventKind::ConnectionStateChanged => ActivityEventTypeDto::ConnectionStateChanged,
+        ActivityEventKind::DeviceNegotiated => ActivityEventTypeDto::DeviceNegotiated,
+        ActivityEventKind::PersonalityConfigured => ActivityEventTypeDto::PersonalityConfigured,
+        ActivityEventKind::SelfPlayConfigured => ActivityEventTypeDto::SelfPlayConfigured,
+        ActivityEventKind::StateRequested => ActivityEventTypeDto::StateRequested,
+        ActivityEventKind::MirroredStateRequested => ActivityEventTypeDto::MirroredStateRequested,
+        ActivityEventKind::ManualSocialActionRequested => {
+            ActivityEventTypeDto::ManualSocialActionRequested
+        }
+        ActivityEventKind::AutonomousSocialActionRequested => {
+            ActivityEventTypeDto::AutonomousSocialActionRequested
+        }
+        ActivityEventKind::SocialActionApplied => ActivityEventTypeDto::SocialActionApplied,
+        ActivityEventKind::StateSynchronized => ActivityEventTypeDto::StateSynchronized,
+        ActivityEventKind::DeviceDiagnosticFraming => ActivityEventTypeDto::DeviceDiagnosticFraming,
+        ActivityEventKind::DeviceDiagnosticChecksum => {
+            ActivityEventTypeDto::DeviceDiagnosticChecksum
+        }
+        ActivityEventKind::DeviceDiagnosticVersion => ActivityEventTypeDto::DeviceDiagnosticVersion,
+        ActivityEventKind::DeviceDiagnosticPayload => ActivityEventTypeDto::DeviceDiagnosticPayload,
+        ActivityEventKind::DeviceSequenceGap => ActivityEventTypeDto::DeviceSequenceGap,
+        ActivityEventKind::DeviceDisplayFault => ActivityEventTypeDto::DeviceDisplayFault,
+        ActivityEventKind::DeviceLinkLost => ActivityEventTypeDto::DeviceLinkLost,
+        ActivityEventKind::DeviceDiagnosticUnknown => ActivityEventTypeDto::DeviceDiagnosticUnknown,
+        ActivityEventKind::DeviceError => ActivityEventTypeDto::DeviceError,
+        ActivityEventKind::ProtocolMalformedFrame => ActivityEventTypeDto::ProtocolMalformedFrame,
+        ActivityEventKind::ProtocolSequenceGap => ActivityEventTypeDto::ProtocolSequenceGap,
         ActivityEventKind::ActionRequested => ActivityEventTypeDto::ActionRequested,
         ActivityEventKind::ActionCompleted => ActivityEventTypeDto::ActionCompleted,
         ActivityEventKind::ActionFailed => ActivityEventTypeDto::ActionFailed,
@@ -327,6 +441,22 @@ fn activity_kind_token(kind: ActivityEventKind) -> ActivityEventTypeDto {
         ActivityEventKind::FirmwareUpdateStarted => ActivityEventTypeDto::FirmwareUpdateStarted,
         ActivityEventKind::FirmwareUpdateCompleted => ActivityEventTypeDto::FirmwareUpdateCompleted,
         ActivityEventKind::FirmwareUpdateFailed => ActivityEventTypeDto::FirmwareUpdateFailed,
+        ActivityEventKind::FirmwareAvailable => ActivityEventTypeDto::FirmwareAvailable,
+        ActivityEventKind::FirmwareUnavailable => ActivityEventTypeDto::FirmwareUnavailable,
+        ActivityEventKind::FirmwareFlashRequested => ActivityEventTypeDto::FirmwareFlashRequested,
+        ActivityEventKind::FirmwarePreparing => ActivityEventTypeDto::FirmwarePreparing,
+        ActivityEventKind::FirmwareSerialReleased => ActivityEventTypeDto::FirmwareSerialReleased,
+        ActivityEventKind::FirmwareFlasherStarted => ActivityEventTypeDto::FirmwareFlasherStarted,
+        ActivityEventKind::FirmwareFlashSucceeded => ActivityEventTypeDto::FirmwareFlashSucceeded,
+        ActivityEventKind::FirmwareReconnectWaiting => {
+            ActivityEventTypeDto::FirmwareReconnectWaiting
+        }
+        ActivityEventKind::FirmwareReconnectTimedOut => {
+            ActivityEventTypeDto::FirmwareReconnectTimedOut
+        }
+        ActivityEventKind::FirmwarePostFlashVerified => {
+            ActivityEventTypeDto::FirmwarePostFlashVerified
+        }
     }
 }
 
@@ -355,6 +485,13 @@ fn activity_outcome(outcome: ActivityOutcome) -> ActivityOutcomeDto {
         ActivityOutcome::Succeeded => ActivityOutcomeDto::Succeeded,
         ActivityOutcome::Failed => ActivityOutcomeDto::Failed,
         ActivityOutcome::Rejected => ActivityOutcomeDto::Rejected,
+        ActivityOutcome::Retrying => ActivityOutcomeDto::Retrying,
+        ActivityOutcome::Applied => ActivityOutcomeDto::Applied,
+        ActivityOutcome::Synchronized => ActivityOutcomeDto::Synchronized,
+        ActivityOutcome::Busy => ActivityOutcomeDto::Busy,
+        ActivityOutcome::TimedOut => ActivityOutcomeDto::TimedOut,
+        ActivityOutcome::Available => ActivityOutcomeDto::Available,
+        ActivityOutcome::Unavailable => ActivityOutcomeDto::Unavailable,
     }
 }
 
@@ -365,10 +502,66 @@ fn activity_metadata(metadata: &ActivityMetadata) -> ActivityMetadataDto {
             retry_count,
             elapsed_ms,
         } => ActivityMetadataDto {
-            connection: activity_connection_state(*state),
+            connection: Some(activity_connection_state(*state)),
             retry_count: *retry_count,
             elapsed_ms: *elapsed_ms,
+            diagnostic_category: None,
+            diagnostic_code: None,
+            firmware_version: None,
+            protocol_version: None,
+            device_id_hash_short: None,
+            capabilities: None,
         },
+        ActivityMetadata::DeviceDiagnostic { category, code } => ActivityMetadataDto {
+            connection: None,
+            retry_count: 0,
+            elapsed_ms: 0,
+            diagnostic_category: Some(activity_diagnostic_category(*category)),
+            diagnostic_code: Some(*code),
+            firmware_version: None,
+            protocol_version: None,
+            device_id_hash_short: None,
+            capabilities: None,
+        },
+        ActivityMetadata::Negotiated {
+            firmware_major,
+            firmware_minor,
+            firmware_patch,
+            protocol_major,
+            protocol_minor,
+            device_id_hash_short,
+            capabilities,
+        } => ActivityMetadataDto {
+            connection: None,
+            retry_count: 0,
+            elapsed_ms: 0,
+            diagnostic_category: None,
+            diagnostic_code: None,
+            firmware_version: Some(format!(
+                "{firmware_major}.{firmware_minor}.{firmware_patch}"
+            )),
+            protocol_version: Some(ProtocolVersionDto {
+                major: *protocol_major,
+                minor: *protocol_minor,
+            }),
+            device_id_hash_short: Some(device_id_hash_short.clone()),
+            capabilities: Some(*capabilities),
+        },
+    }
+}
+
+fn activity_diagnostic_category(
+    category: kivori_protocol::ErrorCategory,
+) -> ActivityDiagnosticCategoryDto {
+    match category {
+        kivori_protocol::ErrorCategory::Io => ActivityDiagnosticCategoryDto::Io,
+        kivori_protocol::ErrorCategory::Handshake => ActivityDiagnosticCategoryDto::Handshake,
+        kivori_protocol::ErrorCategory::Version => ActivityDiagnosticCategoryDto::Version,
+        kivori_protocol::ErrorCategory::Framing => ActivityDiagnosticCategoryDto::Framing,
+        kivori_protocol::ErrorCategory::Checksum => ActivityDiagnosticCategoryDto::Checksum,
+        kivori_protocol::ErrorCategory::Timeout => ActivityDiagnosticCategoryDto::Timeout,
+        kivori_protocol::ErrorCategory::Busy => ActivityDiagnosticCategoryDto::Busy,
+        kivori_protocol::ErrorCategory::BadPayload => ActivityDiagnosticCategoryDto::BadPayload,
     }
 }
 

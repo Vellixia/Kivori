@@ -157,5 +157,5 @@ pub fn mirror_state(app: State<'_, AppState>, state: String) -> Result<(), Strin
     }
     let desired =
         dto::sendable_from_token(&state).ok_or_else(|| format!("not a sendable state: {state}"))?;
-    app.send_command(DeviceCommand::SetDesired(desired))
+    app.send_command(DeviceCommand::MirrorDesired(desired))
 }
