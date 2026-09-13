@@ -8,13 +8,14 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use kivori_model::ConnectionState;
+use kivori_model::{ConnectionState, MascotAction, MascotPersonality, SendableState};
 
 static NEXT_ACTIVITY_ID: AtomicU64 = AtomicU64::new(1);
 
 /// The closed set of native activity event kinds currently emitted by the desktop core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityEventKind {
+    ConnectionAttempted,
     ConnectionOpened,
     HandshakeStarted,
     HandshakeSucceeded,
@@ -36,6 +37,7 @@ pub enum ActivityEventKind {
     AutonomousSocialActionRequested,
     SocialActionApplied,
     StateSynchronized,
+    DeviceStateObserved,
     DeviceDiagnosticFraming,
     DeviceDiagnosticChecksum,
     DeviceDiagnosticVersion,
@@ -45,6 +47,8 @@ pub enum ActivityEventKind {
     DeviceLinkLost,
     DeviceDiagnosticUnknown,
     DeviceError,
+    DeviceBusy,
+    DeviceTimedOut,
     ProtocolMalformedFrame,
     ProtocolSequenceGap,
     /// A desktop-owned mascot action was requested.
@@ -77,6 +81,7 @@ pub enum ActivityEventKind {
     FirmwareReconnectWaiting,
     FirmwareReconnectTimedOut,
     FirmwarePostFlashVerified,
+    FirmwarePreparationRejected,
 }
 
 /// Closed severity vocabulary for native activity.
@@ -124,11 +129,13 @@ struct ActivityClassification {
 impl ActivityEventKind {
     const fn classification(self) -> ActivityClassification {
         match self {
-            Self::ConnectionOpened | Self::HandshakeStarted => ActivityClassification {
-                severity: ActivitySeverity::Info,
-                source: ActivitySource::Connection,
-                outcome: ActivityOutcome::Started,
-            },
+            Self::ConnectionAttempted | Self::ConnectionOpened | Self::HandshakeStarted => {
+                ActivityClassification {
+                    severity: ActivitySeverity::Info,
+                    source: ActivitySource::Connection,
+                    outcome: ActivityOutcome::Started,
+                }
+            }
             Self::HandshakeSucceeded | Self::ConnectionRecovered => ActivityClassification {
                 severity: ActivitySeverity::Info,
                 source: ActivitySource::Connection,
@@ -184,6 +191,11 @@ impl ActivityEventKind {
                 source: ActivitySource::Device,
                 outcome: ActivityOutcome::Synchronized,
             },
+            Self::DeviceStateObserved => ActivityClassification {
+                severity: ActivitySeverity::Warning,
+                source: ActivitySource::Device,
+                outcome: ActivityOutcome::Observed,
+            },
             Self::DeviceDiagnosticFraming
             | Self::DeviceDiagnosticChecksum
             | Self::DeviceDiagnosticVersion
@@ -200,6 +212,16 @@ impl ActivityEventKind {
                 severity: ActivitySeverity::Warning,
                 source: ActivitySource::Device,
                 outcome: ActivityOutcome::Rejected,
+            },
+            Self::DeviceBusy => ActivityClassification {
+                severity: ActivitySeverity::Warning,
+                source: ActivitySource::Device,
+                outcome: ActivityOutcome::Busy,
+            },
+            Self::DeviceTimedOut => ActivityClassification {
+                severity: ActivitySeverity::Warning,
+                source: ActivitySource::Device,
+                outcome: ActivityOutcome::TimedOut,
             },
             Self::ProtocolMalformedFrame | Self::ProtocolSequenceGap => ActivityClassification {
                 severity: ActivitySeverity::Warning,
@@ -287,6 +309,11 @@ impl ActivityEventKind {
                 source: ActivitySource::Firmware,
                 outcome: ActivityOutcome::TimedOut,
             },
+            Self::FirmwarePreparationRejected => ActivityClassification {
+                severity: ActivitySeverity::Warning,
+                source: ActivitySource::Firmware,
+                outcome: ActivityOutcome::Rejected,
+            },
         }
     }
 }
@@ -318,6 +345,34 @@ pub enum ActivityMetadata {
         device_id_hash_short: String,
         capabilities: u32,
     },
+    Action {
+        state: Option<SendableState>,
+        personality: Option<MascotPersonality>,
+        self_play: Option<bool>,
+        action: Option<MascotAction>,
+        seed: Option<u32>,
+        applied_at_ms: Option<u32>,
+        autonomous: Option<bool>,
+    },
+    ProtocolMalformed {
+        category: ProtocolMalformedCategory,
+        payload_len: Option<u16>,
+        sequence: Option<u16>,
+    },
+    ProtocolSequenceGap {
+        skipped: u16,
+    },
+    DeviceState {
+        reported: kivori_model::CompanionState,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolMalformedCategory {
+    Framing,
+    Checksum,
+    Version,
+    Payload,
 }
 
 /// A closed observation produced by the synchronous session parser.
@@ -480,6 +535,7 @@ fn summary_for(kind: ActivityEventKind, metadata: Option<&ActivityMetadata>) -> 
         (ActivityEventKind::ConnectionStateChanged, Some(_)) => {
             "Connection state changed.".to_string()
         }
+        (ActivityEventKind::ConnectionAttempted, _) => "Connection attempted.".to_string(),
         (ActivityEventKind::ConnectionOpened, _) => "Connection opened.".to_string(),
         (ActivityEventKind::HandshakeStarted, _) => "Handshake started.".to_string(),
         (ActivityEventKind::HandshakeSucceeded, _) => "Handshake succeeded.".to_string(),
@@ -505,6 +561,7 @@ fn summary_for(kind: ActivityEventKind, metadata: Option<&ActivityMetadata>) -> 
         }
         (ActivityEventKind::SocialActionApplied, _) => "Social reaction applied.".to_string(),
         (ActivityEventKind::StateSynchronized, _) => "Device state synchronized.".to_string(),
+        (ActivityEventKind::DeviceStateObserved, _) => "Device state observed.".to_string(),
         (ActivityEventKind::DeviceDiagnosticFraming, _) => {
             "Device rejected a framing error.".to_string()
         }
@@ -524,6 +581,8 @@ fn summary_for(kind: ActivityEventKind, metadata: Option<&ActivityMetadata>) -> 
             "Device diagnostic observed.".to_string()
         }
         (ActivityEventKind::DeviceError, _) => "Device rejected an operation.".to_string(),
+        (ActivityEventKind::DeviceBusy, _) => "Device is busy.".to_string(),
+        (ActivityEventKind::DeviceTimedOut, _) => "Device operation timed out.".to_string(),
         (ActivityEventKind::ProtocolMalformedFrame, _) => {
             "Malformed protocol frame dropped.".to_string()
         }
@@ -561,6 +620,9 @@ fn summary_for(kind: ActivityEventKind, metadata: Option<&ActivityMetadata>) -> 
         }
         (ActivityEventKind::FirmwarePostFlashVerified, _) => {
             "Firmware update verified.".to_string()
+        }
+        (ActivityEventKind::FirmwarePreparationRejected, _) => {
+            "Firmware preparation was rejected.".to_string()
         }
     }
 }

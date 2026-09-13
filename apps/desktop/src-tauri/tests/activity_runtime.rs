@@ -164,7 +164,7 @@ fn safe_device_diagnostics_and_errors_are_queued_in_wire_order() {
             ActivityEventKind::DeviceSequenceGap,
             ActivityEventKind::DeviceDisplayFault,
             ActivityEventKind::DeviceLinkLost,
-            ActivityEventKind::DeviceError,
+            ActivityEventKind::DeviceBusy,
         ]
     );
 }
@@ -259,7 +259,7 @@ fn action_acknowledgement_and_changed_state_are_queued_in_wire_order() {
             .collect::<Vec<_>>(),
         [
             ActivityEventKind::SocialActionApplied,
-            ActivityEventKind::StateSynchronized
+            ActivityEventKind::DeviceStateObserved
         ]
     );
 }

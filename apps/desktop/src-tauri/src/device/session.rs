@@ -251,7 +251,10 @@ impl Session {
             Ok((header, message)) => {
                 match self.inbound.classify(header.seq) {
                     SeqClass::Duplicate => return Ok(()),
-                    SeqClass::Gap(_) => self.observe(ActivityEventKind::ProtocolSequenceGap, None),
+                    SeqClass::Gap(skipped) => self.observe(
+                        ActivityEventKind::ProtocolSequenceGap,
+                        Some(ActivityMetadata::ProtocolSequenceGap { skipped }),
+                    ),
                     SeqClass::First | SeqClass::Ok => {}
                 }
                 self.handle_message(header.version, message, link, manager, orchestrator)?;
@@ -275,7 +278,20 @@ impl Session {
                     }
                 }
             }
-            Err(_) => self.observe(ActivityEventKind::ProtocolMalformedFrame, None),
+            Err(error) => {
+                let mut header_scratch: heapless::Vec<u8, MAX_FRAME> = heapless::Vec::new();
+                let safe_header = decode_frame(packet, &mut header_scratch)
+                    .ok()
+                    .map(|(header, _)| header);
+                self.observe(
+                    ActivityEventKind::ProtocolMalformedFrame,
+                    Some(ActivityMetadata::ProtocolMalformed {
+                        category: malformed_category(error),
+                        payload_len: safe_header.map(|header| header.payload_len),
+                        sequence: safe_header.map(|header| header.seq),
+                    }),
+                );
+            }
         }
         Ok(())
     }
@@ -343,12 +359,32 @@ impl Session {
             Message::StateReport(report) => {
                 if self.reported != Some(report.reported) {
                     self.reported = Some(report.reported);
-                    self.observe(ActivityEventKind::StateSynchronized, None);
+                    self.observe(
+                        if report.reported == orchestrator.desired().to_companion() {
+                            ActivityEventKind::StateSynchronized
+                        } else {
+                            ActivityEventKind::DeviceStateObserved
+                        },
+                        Some(ActivityMetadata::DeviceState {
+                            reported: report.reported,
+                        }),
+                    );
                 }
             }
             Message::MascotActionApplied(applied) => {
                 self.last_mascot_action_applied = Some(applied);
-                self.observe(ActivityEventKind::SocialActionApplied, None);
+                self.observe(
+                    ActivityEventKind::SocialActionApplied,
+                    Some(ActivityMetadata::Action {
+                        state: None,
+                        personality: Some(applied.personality),
+                        self_play: None,
+                        action: Some(applied.action),
+                        seed: Some(applied.seed),
+                        applied_at_ms: Some(applied.applied_at_ms),
+                        autonomous: None,
+                    }),
+                );
             }
             Message::Diagnostic(diagnostic) => self.observe(
                 device_diagnostic_kind(diagnostic.code),
@@ -358,7 +394,11 @@ impl Session {
                 }),
             ),
             Message::Error(error) => self.observe(
-                ActivityEventKind::DeviceError,
+                match error.category {
+                    kivori_protocol::ErrorCategory::Busy => ActivityEventKind::DeviceBusy,
+                    kivori_protocol::ErrorCategory::Timeout => ActivityEventKind::DeviceTimedOut,
+                    _ => ActivityEventKind::DeviceError,
+                },
                 Some(ActivityMetadata::DeviceDiagnostic {
                     category: error.category,
                     code: error.code,
@@ -438,5 +478,20 @@ fn device_diagnostic_kind(code: u16) -> ActivityEventKind {
         6 => ActivityEventKind::DeviceDisplayFault,
         7 => ActivityEventKind::DeviceLinkLost,
         _ => ActivityEventKind::DeviceDiagnosticUnknown,
+    }
+}
+
+fn malformed_category(error: ProtoError) -> crate::activity::ProtocolMalformedCategory {
+    match error {
+        ProtoError::BadCrc => crate::activity::ProtocolMalformedCategory::Checksum,
+        ProtoError::UnsupportedVersion => crate::activity::ProtocolMalformedCategory::Version,
+        ProtoError::PayloadTooLarge | ProtoError::Postcard => {
+            crate::activity::ProtocolMalformedCategory::Payload
+        }
+        ProtoError::BufferOverflow
+        | ProtoError::Cobs
+        | ProtoError::TooShort
+        | ProtoError::BadMagic
+        | ProtoError::LengthMismatch => crate::activity::ProtocolMalformedCategory::Framing,
     }
 }

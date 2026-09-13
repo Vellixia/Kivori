@@ -200,12 +200,37 @@ pub struct ActivityMetadataDto {
     pub device_id_hash_short: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub personality: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub self_play: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub applied_at_ms: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub autonomous: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol_category: Option<ProtocolMalformedCategoryDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload_len: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reported: Option<String>,
 }
 
 /// Closed activity-event type token serialized to the webview.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ActivityEventTypeDto {
+    ConnectionAttempted,
     ConnectionOpened,
     HandshakeStarted,
     HandshakeSucceeded,
@@ -227,6 +252,7 @@ pub enum ActivityEventTypeDto {
     AutonomousSocialActionRequested,
     SocialActionApplied,
     StateSynchronized,
+    DeviceStateObserved,
     DeviceDiagnosticFraming,
     DeviceDiagnosticChecksum,
     DeviceDiagnosticVersion,
@@ -236,6 +262,8 @@ pub enum ActivityEventTypeDto {
     DeviceLinkLost,
     DeviceDiagnosticUnknown,
     DeviceError,
+    DeviceBusy,
+    DeviceTimedOut,
     ProtocolMalformedFrame,
     ProtocolSequenceGap,
     ActionRequested,
@@ -258,6 +286,7 @@ pub enum ActivityEventTypeDto {
     FirmwareReconnectWaiting,
     FirmwareReconnectTimedOut,
     FirmwarePostFlashVerified,
+    FirmwarePreparationRejected,
 }
 
 /// Closed connection-state token serialized in activity metadata.
@@ -321,6 +350,15 @@ pub enum ActivityDiagnosticCategoryDto {
     Timeout,
     Busy,
     BadPayload,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProtocolMalformedCategoryDto {
+    Framing,
+    Checksum,
+    Version,
+    Payload,
 }
 
 /// Projects application info. `device_studio_enabled` reflects the compiled-in Device Studio feature.
@@ -392,6 +430,7 @@ pub fn activity_event(event: &ActivityEvent) -> ActivityEventDto {
 
 fn activity_kind_token(kind: ActivityEventKind) -> ActivityEventTypeDto {
     match kind {
+        ActivityEventKind::ConnectionAttempted => ActivityEventTypeDto::ConnectionAttempted,
         ActivityEventKind::ConnectionOpened => ActivityEventTypeDto::ConnectionOpened,
         ActivityEventKind::HandshakeStarted => ActivityEventTypeDto::HandshakeStarted,
         ActivityEventKind::HandshakeSucceeded => ActivityEventTypeDto::HandshakeSucceeded,
@@ -418,6 +457,7 @@ fn activity_kind_token(kind: ActivityEventKind) -> ActivityEventTypeDto {
         }
         ActivityEventKind::SocialActionApplied => ActivityEventTypeDto::SocialActionApplied,
         ActivityEventKind::StateSynchronized => ActivityEventTypeDto::StateSynchronized,
+        ActivityEventKind::DeviceStateObserved => ActivityEventTypeDto::DeviceStateObserved,
         ActivityEventKind::DeviceDiagnosticFraming => ActivityEventTypeDto::DeviceDiagnosticFraming,
         ActivityEventKind::DeviceDiagnosticChecksum => {
             ActivityEventTypeDto::DeviceDiagnosticChecksum
@@ -429,6 +469,8 @@ fn activity_kind_token(kind: ActivityEventKind) -> ActivityEventTypeDto {
         ActivityEventKind::DeviceLinkLost => ActivityEventTypeDto::DeviceLinkLost,
         ActivityEventKind::DeviceDiagnosticUnknown => ActivityEventTypeDto::DeviceDiagnosticUnknown,
         ActivityEventKind::DeviceError => ActivityEventTypeDto::DeviceError,
+        ActivityEventKind::DeviceBusy => ActivityEventTypeDto::DeviceBusy,
+        ActivityEventKind::DeviceTimedOut => ActivityEventTypeDto::DeviceTimedOut,
         ActivityEventKind::ProtocolMalformedFrame => ActivityEventTypeDto::ProtocolMalformedFrame,
         ActivityEventKind::ProtocolSequenceGap => ActivityEventTypeDto::ProtocolSequenceGap,
         ActivityEventKind::ActionRequested => ActivityEventTypeDto::ActionRequested,
@@ -456,6 +498,9 @@ fn activity_kind_token(kind: ActivityEventKind) -> ActivityEventTypeDto {
         }
         ActivityEventKind::FirmwarePostFlashVerified => {
             ActivityEventTypeDto::FirmwarePostFlashVerified
+        }
+        ActivityEventKind::FirmwarePreparationRejected => {
+            ActivityEventTypeDto::FirmwarePreparationRejected
         }
     }
 }
@@ -511,6 +556,18 @@ fn activity_metadata(metadata: &ActivityMetadata) -> ActivityMetadataDto {
             protocol_version: None,
             device_id_hash_short: None,
             capabilities: None,
+            state: None,
+            personality: None,
+            self_play: None,
+            action: None,
+            seed: None,
+            applied_at_ms: None,
+            autonomous: None,
+            protocol_category: None,
+            payload_len: None,
+            sequence: None,
+            skipped: None,
+            reported: None,
         },
         ActivityMetadata::DeviceDiagnostic { category, code } => ActivityMetadataDto {
             connection: None,
@@ -522,6 +579,18 @@ fn activity_metadata(metadata: &ActivityMetadata) -> ActivityMetadataDto {
             protocol_version: None,
             device_id_hash_short: None,
             capabilities: None,
+            state: None,
+            personality: None,
+            self_play: None,
+            action: None,
+            seed: None,
+            applied_at_ms: None,
+            autonomous: None,
+            protocol_category: None,
+            payload_len: None,
+            sequence: None,
+            skipped: None,
+            reported: None,
         },
         ActivityMetadata::Negotiated {
             firmware_major,
@@ -546,6 +615,137 @@ fn activity_metadata(metadata: &ActivityMetadata) -> ActivityMetadataDto {
             }),
             device_id_hash_short: Some(device_id_hash_short.clone()),
             capabilities: Some(*capabilities),
+            state: None,
+            personality: None,
+            self_play: None,
+            action: None,
+            seed: None,
+            applied_at_ms: None,
+            autonomous: None,
+            protocol_category: None,
+            payload_len: None,
+            sequence: None,
+            skipped: None,
+            reported: None,
+        },
+        ActivityMetadata::Action {
+            state,
+            personality,
+            self_play,
+            action,
+            seed,
+            applied_at_ms,
+            autonomous,
+        } => ActivityMetadataDto {
+            connection: None,
+            retry_count: 0,
+            elapsed_ms: 0,
+            diagnostic_category: None,
+            diagnostic_code: None,
+            firmware_version: None,
+            protocol_version: None,
+            device_id_hash_short: None,
+            capabilities: None,
+            state: state.map(sendable_token).map(str::to_string),
+            personality: personality
+                .map(mascot_personality_token)
+                .map(str::to_string),
+            self_play: *self_play,
+            action: action.map(mascot_action_token).map(str::to_string),
+            seed: *seed,
+            applied_at_ms: *applied_at_ms,
+            autonomous: *autonomous,
+            protocol_category: None,
+            payload_len: None,
+            sequence: None,
+            skipped: None,
+            reported: None,
+        },
+        ActivityMetadata::ProtocolMalformed {
+            category,
+            payload_len,
+            sequence,
+        } => ActivityMetadataDto {
+            connection: None,
+            retry_count: 0,
+            elapsed_ms: 0,
+            diagnostic_category: None,
+            diagnostic_code: None,
+            firmware_version: None,
+            protocol_version: None,
+            device_id_hash_short: None,
+            capabilities: None,
+            state: None,
+            personality: None,
+            self_play: None,
+            action: None,
+            seed: None,
+            applied_at_ms: None,
+            autonomous: None,
+            protocol_category: Some(match category {
+                crate::activity::ProtocolMalformedCategory::Framing => {
+                    ProtocolMalformedCategoryDto::Framing
+                }
+                crate::activity::ProtocolMalformedCategory::Checksum => {
+                    ProtocolMalformedCategoryDto::Checksum
+                }
+                crate::activity::ProtocolMalformedCategory::Version => {
+                    ProtocolMalformedCategoryDto::Version
+                }
+                crate::activity::ProtocolMalformedCategory::Payload => {
+                    ProtocolMalformedCategoryDto::Payload
+                }
+            }),
+            payload_len: *payload_len,
+            sequence: *sequence,
+            skipped: None,
+            reported: None,
+        },
+        ActivityMetadata::ProtocolSequenceGap { skipped } => ActivityMetadataDto {
+            connection: None,
+            retry_count: 0,
+            elapsed_ms: 0,
+            diagnostic_category: None,
+            diagnostic_code: None,
+            firmware_version: None,
+            protocol_version: None,
+            device_id_hash_short: None,
+            capabilities: None,
+            state: None,
+            personality: None,
+            self_play: None,
+            action: None,
+            seed: None,
+            applied_at_ms: None,
+            autonomous: None,
+            protocol_category: None,
+            payload_len: None,
+            sequence: None,
+            skipped: Some(*skipped),
+            reported: None,
+        },
+        ActivityMetadata::DeviceState { reported } => ActivityMetadataDto {
+            connection: None,
+            retry_count: 0,
+            elapsed_ms: 0,
+            diagnostic_category: None,
+            diagnostic_code: None,
+            firmware_version: None,
+            protocol_version: None,
+            device_id_hash_short: None,
+            capabilities: None,
+            state: None,
+            personality: None,
+            self_play: None,
+            action: None,
+            seed: None,
+            applied_at_ms: None,
+            autonomous: None,
+            protocol_category: None,
+            payload_len: None,
+            sequence: None,
+            skipped: None,
+            reported: Some(companion_token(*reported).to_string()),
         },
     }
 }
