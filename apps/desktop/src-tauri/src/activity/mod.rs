@@ -394,6 +394,122 @@ impl SessionActivity {
     }
 }
 
+/// Pure activity planner shared by the device loop and host-side producer tests.
+#[derive(Debug, Default)]
+pub struct RuntimeActivityPlanner {
+    pending_recovery: bool,
+}
+
+impl RuntimeActivityPlanner {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            pending_recovery: false,
+        }
+    }
+    #[must_use]
+    pub const fn attempt(&self) -> SessionActivity {
+        SessionActivity::new(ActivityEventKind::ConnectionAttempted, None)
+    }
+    #[must_use]
+    pub fn failure(&mut self, kind: ActivityEventKind) -> [SessionActivity; 2] {
+        self.pending_recovery = true;
+        [
+            SessionActivity::new(kind, None),
+            SessionActivity::new(ActivityEventKind::ConnectionRetryScheduled, None),
+        ]
+    }
+    pub fn recovered(&mut self) -> Option<SessionActivity> {
+        self.pending_recovery.then(|| {
+            self.pending_recovery = false;
+            SessionActivity::new(ActivityEventKind::ConnectionRecovered, None)
+        })
+    }
+    #[must_use]
+    pub fn requests(
+        state: SendableState,
+        personality: MascotPersonality,
+        self_play: bool,
+        action: MascotAction,
+        seed: u32,
+    ) -> [SessionActivity; 6] {
+        [
+            SessionActivity::new(
+                ActivityEventKind::StateRequested,
+                Some(ActivityMetadata::Action {
+                    state: Some(state),
+                    personality: None,
+                    self_play: None,
+                    action: None,
+                    seed: None,
+                    applied_at_ms: None,
+                    autonomous: Some(false),
+                }),
+            ),
+            SessionActivity::new(
+                ActivityEventKind::MirroredStateRequested,
+                Some(ActivityMetadata::Action {
+                    state: Some(state),
+                    personality: None,
+                    self_play: None,
+                    action: None,
+                    seed: None,
+                    applied_at_ms: None,
+                    autonomous: Some(false),
+                }),
+            ),
+            SessionActivity::new(
+                ActivityEventKind::PersonalityConfigured,
+                Some(ActivityMetadata::Action {
+                    state: None,
+                    personality: Some(personality),
+                    self_play: None,
+                    action: None,
+                    seed: None,
+                    applied_at_ms: None,
+                    autonomous: None,
+                }),
+            ),
+            SessionActivity::new(
+                ActivityEventKind::SelfPlayConfigured,
+                Some(ActivityMetadata::Action {
+                    state: None,
+                    personality: None,
+                    self_play: Some(self_play),
+                    action: None,
+                    seed: None,
+                    applied_at_ms: None,
+                    autonomous: None,
+                }),
+            ),
+            SessionActivity::new(
+                ActivityEventKind::ManualSocialActionRequested,
+                Some(ActivityMetadata::Action {
+                    state: None,
+                    personality: Some(personality),
+                    self_play: None,
+                    action: Some(action),
+                    seed: Some(seed),
+                    applied_at_ms: None,
+                    autonomous: Some(false),
+                }),
+            ),
+            SessionActivity::new(
+                ActivityEventKind::AutonomousSocialActionRequested,
+                Some(ActivityMetadata::Action {
+                    state: None,
+                    personality: Some(personality),
+                    self_play: None,
+                    action: Some(action),
+                    seed: Some(seed),
+                    applied_at_ms: None,
+                    autonomous: Some(true),
+                }),
+            ),
+        ]
+    }
+}
+
 /// One session activity record with a process-monotonic identifier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivityEvent {

@@ -322,47 +322,23 @@ fn device_loop(
                         publish_firmware_status(&firmware_status, &flash);
                         continue;
                     };
-                    record_kind(&app, &activity_log, ActivityEventKind::FirmwarePreparing);
                     publish_firmware_status(&firmware_status, &flash);
 
                     // This drop closes the serial handle before `espflash` opens the same port.
                     link = None;
                     connected_port = None;
-                    record_kind(
-                        &app,
-                        &activity_log,
-                        ActivityEventKind::FirmwareSerialReleased,
-                    );
                     deadlines.on_link_lost();
                     manager.apply(ManagerEvent::PortRemoved);
+                    flash.mark_serial_released();
                     flash.mark_flashing();
-                    record_kind(
-                        &app,
-                        &activity_log,
-                        ActivityEventKind::FirmwareFlasherStarted,
-                    );
                     publish_firmware_status(&firmware_status, &flash);
 
                     let resume = flash.finish(firmware::flash_bundled(&port, &cancel));
-                    record_kind(
-                        &app,
-                        &activity_log,
-                        if matches!(resume, ResumeTarget::Discovery) {
-                            ActivityEventKind::FirmwareUpdateFailed
-                        } else {
-                            ActivityEventKind::FirmwareFlashSucceeded
-                        },
-                    );
                     publish_firmware_status(&firmware_status, &flash);
                     retry_at = None;
                     match resume {
                         ResumeTarget::Discovery => reconnect_deadline = None,
                         ResumeTarget::SamePort(_) => {
-                            record_kind(
-                                &app,
-                                &activity_log,
-                                ActivityEventKind::FirmwareReconnectWaiting,
-                            );
                             reconnect_deadline = Some(Instant::now() + firmware::RECONNECT_TIMEOUT);
                         }
                     }
@@ -379,11 +355,7 @@ fn device_loop(
             deadlines.on_link_lost();
             manager.apply(ManagerEvent::PortRemoved);
             flash.reconnect_timed_out();
-            record_kind(
-                &app,
-                &activity_log,
-                ActivityEventKind::FirmwareReconnectTimedOut,
-            );
+            drain_firmware_activity(&app, &activity_log, &mut flash);
             publish_firmware_status(&firmware_status, &flash);
             reconnect_deadline = None;
             retry_at = None;
@@ -468,11 +440,7 @@ fn device_loop(
         {
             if let (Some(port), Some(device)) = (connected_port.as_deref(), manager.device()) {
                 if flash.handshake(port, &device.device_id_hash_short, true) {
-                    record_kind(
-                        &app,
-                        &activity_log,
-                        ActivityEventKind::FirmwarePostFlashVerified,
-                    );
+                    drain_firmware_activity(&app, &activity_log, &mut flash);
                     publish_firmware_status(&firmware_status, &flash);
                     reconnect_deadline = None;
                 }

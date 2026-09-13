@@ -133,9 +133,13 @@ fn accepted_firmware_workflow_queues_closed_ordered_phases_without_native_detail
         ResumeTarget::SamePort("COM7".to_string())
     );
     assert!(flash.handshake("COM7", "deadbeef", true));
+    let observations = flash.drain_activity();
+    assert!(
+        observations.iter().all(|item| item.metadata.is_none()),
+        "firmware phases carry no native details"
+    );
     assert_eq!(
-        flash
-            .drain_activity()
+        observations
             .into_iter()
             .map(|item| item.kind)
             .collect::<Vec<_>>(),

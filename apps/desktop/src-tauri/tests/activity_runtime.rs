@@ -3,7 +3,9 @@
 use std::collections::VecDeque;
 use std::convert::Infallible;
 
-use kivori_desktop::activity::ActivityEventKind;
+use kivori_desktop::activity::{
+    ActivityEventKind, ActivityMetadata, ActivityOutcome, RuntimeActivityPlanner,
+};
 use kivori_desktop::device::fsm::ConnectionManager;
 use kivori_desktop::device::session::{Session, SessionConfig};
 use kivori_desktop::device::transport::SerialLink;
@@ -261,5 +263,78 @@ fn action_acknowledgement_and_changed_state_are_queued_in_wire_order() {
             ActivityEventKind::SocialActionApplied,
             ActivityEventKind::DeviceStateObserved
         ]
+    );
+}
+
+#[test]
+fn planner_retains_failure_retry_and_recovery_across_intervening_states() {
+    let mut planner = RuntimeActivityPlanner::new();
+    assert_eq!(
+        planner.attempt().kind,
+        ActivityEventKind::ConnectionAttempted
+    );
+    let failure = planner.failure(ActivityEventKind::HeartbeatTimedOut);
+    assert_eq!(
+        failure.iter().map(|entry| entry.kind).collect::<Vec<_>>(),
+        [
+            ActivityEventKind::HeartbeatTimedOut,
+            ActivityEventKind::ConnectionRetryScheduled
+        ]
+    );
+    assert_eq!(
+        planner.recovered().map(|entry| entry.kind),
+        Some(ActivityEventKind::ConnectionRecovered)
+    );
+}
+
+#[test]
+fn planner_builds_distinct_closed_request_metadata_in_order() {
+    let requests = RuntimeActivityPlanner::requests(
+        kivori_model::SendableState::Busy,
+        kivori_model::MascotPersonality::Playful,
+        false,
+        kivori_model::MascotAction::Pet,
+        44,
+    );
+    assert_eq!(
+        requests.iter().map(|entry| entry.kind).collect::<Vec<_>>(),
+        [
+            ActivityEventKind::StateRequested,
+            ActivityEventKind::MirroredStateRequested,
+            ActivityEventKind::PersonalityConfigured,
+            ActivityEventKind::SelfPlayConfigured,
+            ActivityEventKind::ManualSocialActionRequested,
+            ActivityEventKind::AutonomousSocialActionRequested
+        ]
+    );
+    assert!(matches!(
+        requests[0].metadata,
+        Some(ActivityMetadata::Action {
+            state: Some(kivori_model::SendableState::Busy),
+            ..
+        })
+    ));
+    assert!(matches!(
+        requests[4].metadata,
+        Some(ActivityMetadata::Action {
+            action: Some(kivori_model::MascotAction::Pet),
+            seed: Some(44),
+            autonomous: Some(false),
+            ..
+        })
+    ));
+}
+
+#[test]
+fn busy_and_timeout_have_closed_outcomes() {
+    let log = kivori_desktop::activity::ActivityLog::new(2);
+    assert_eq!(
+        log.record(ActivityEventKind::DeviceBusy, None).outcome(),
+        ActivityOutcome::Busy
+    );
+    assert_eq!(
+        log.record(ActivityEventKind::DeviceTimedOut, None)
+            .outcome(),
+        ActivityOutcome::TimedOut
     );
 }
