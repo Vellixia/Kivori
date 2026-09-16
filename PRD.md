@@ -82,11 +82,21 @@ If one state cannot be verified, only that state should become unknown when poss
 
 ### 5.6 Recovery must remain available
 
-Hardware recovery should not depend on the desktop software or host computer being healthy.
+Recovery must not depend on one healthy software layer.
+
+Normal product recovery should include:
+
+- a user-accessible MCU reboot path that does not depend on healthy desktop software;
+- rollback/recovery behavior for interrupted or invalid firmware updates where the platform supports it;
+- an application-independent hardware/ROM bootloader recovery path on production hardware so a corrupt application image does not permanently brick the device.
+
+Factory reset remains separate from ordinary recovery.
 
 ### 5.7 Offline-first core
 
 Core control, state representation, configuration, and device operation should not require cloud connectivity. Cloud profile synchronization is not required for MVP.
+
+Update discovery may use network connectivity, but already-installed core functionality should continue to operate without cloud access.
 
 ### 5.8 No ambiguous silence
 
@@ -97,6 +107,21 @@ A blank, static, or unchanged presentation must not accidentally look like a fro
 If progress cannot be measured truthfully, Kivori should show indeterminate activity rather than inventing a percentage or completion estimate.
 
 Deliberate Display Sleep is the primary normal exception: the panel may be blank because blanking is itself the intended presentation. Low-level states in which the renderer is technically unavailable may also temporarily lack the normal visual surface, but Kivori should use any reliable hardware indication available and Kivori Desktop should communicate the state where possible.
+
+### 5.9 Updates preserve compatibility and recoverability
+
+Kivori Desktop and device firmware are one product system even when they version independently.
+
+Update behavior should therefore:
+
+- make desktop/firmware compatibility explicit before installation;
+- authenticate update artifacts before installation;
+- resolve required installation order before changing either side;
+- avoid disruptive firmware flashing without clear user intent except where a future documented safety/security policy explicitly requires otherwise;
+- preserve a recovery path if installation fails;
+- communicate current phase, success, failure, rollback, and recovery intentionally.
+
+A new version being available does not by itself justify immediately interrupting the user's work.
 
 ## 6. Primary Product Capabilities
 
@@ -136,7 +161,7 @@ The buddy and indicators may represent states such as:
 
 Physical input should receive immediate local acknowledgement. The display may show local previews for continuous controls, then reconcile them against confirmed state.
 
-### 6.5 Desktop configuration
+### 6.5 Desktop configuration and update coordination
 
 Kivori Desktop is the configuration center for:
 
@@ -149,9 +174,14 @@ Kivori Desktop is the configuration center for:
 - ambient/display behavior;
 - application targeting;
 - device assignment;
-- firmware updates.
+- desktop application updates;
+- firmware updates;
+- installed desktop, firmware, and hardware-revision visibility;
+- release/update status and compatibility guidance.
 
 The configuration window does not need to remain visible during normal use.
+
+Kivori Desktop should act as the update coordinator: it discovers applicable releases, evaluates desktop/firmware/hardware compatibility, presents release information, and performs update operations in a safe dependency order.
 
 ## 7. Interaction Model
 
@@ -161,7 +191,11 @@ MVP physical input is based on a rotary encoder with press behavior.
 
 MVP uses one active gesture at a time. Simultaneous controls are not interpreted as implicit chords. Future combinations such as `Hold + Rotate` must be introduced as explicit input types.
 
-### 7.2 Continuous controls
+Normal discrete button mappings are release-qualified and do not implicitly inherit OS key-repeat behavior. A user who maps a discrete action such as `Next Track` receives one action per valid discrete press/release.
+
+Continuous or repeating button behavior must be an explicit action/input type rather than a hidden consequence of holding a discrete mapping.
+
+### 7.2 Continuous controls and rotary scope
 
 Rotary-capable actions may define:
 
@@ -174,6 +208,10 @@ Rotary-capable actions may define:
 The default acceleration reset target is **250 ms** without a new detent.
 
 Bounded values clamp immediately. Excess movement at a boundary may receive one subtle reaction, and reversing direction takes effect immediately.
+
+A normal `Rotate` binding represents one bidirectional logical control. A Global `Rotate -> Master Volume` binding therefore owns both clockwise and counter-clockwise detents for that rotary gesture.
+
+MVP must not silently compose unrelated mappings such as Global clockwise volume with Application counter-clockwise custom behavior. If future directional split binding is supported, it must be an explicit configuration mode with visible conflict/precedence rules.
 
 ### 7.3 Confirmation model
 
@@ -203,13 +241,19 @@ Mouse hover does not switch profiles. Momentary focus changes should not immedia
 
 A gesture belongs to the context in which it began. If focus changes mid-rotation, the entire current gesture remains bound to its starting profile. The new profile applies to the next interaction.
 
-### 8.3 Active OS user
+### 8.3 Binding precedence
+
+Global bindings are explicit reservations of their configured logical input scope.
+
+For MVP, a global bidirectional `Rotate` binding reserves the complete rotary gesture. An application profile may replace that whole logical rotary binding only through an explicit higher-precedence profile override; it does not partially steal one direction from the global binding.
+
+### 8.4 Active OS user
 
 Configuration belongs to the active OS user. One user's mappings must never carry into another user's desktop session.
 
 Kivori Desktop is expected to operate in the user's normal session for MVP rather than requiring the entire product to run as a permanently privileged machine-wide service.
 
-### 8.4 Machine scope
+### 8.5 Machine scope
 
 MVP profiles are local per machine and per OS user. Machine-local paths, scripts, device identities, and application installations are not cloud-synchronized.
 
@@ -334,9 +378,11 @@ Kivori distinguishes user-initiated feedback from unsolicited background feedbac
 - user-initiated acknowledgement follows Kivori's own feedback settings;
 - background buzzer feedback respects OS Do Not Disturb / Focus Mode by default.
 
-## 14. Device Recovery and Firmware Update
+## 14. Device Recovery and Update System
 
-MVP should provide a software-independent recovery gesture:
+### 14.1 Normal MCU recovery
+
+MVP should provide a software-independent-from-desktop recovery gesture:
 
 **Hold the primary hardware button for approximately 10 seconds -> force MCU reboot.**
 
@@ -344,7 +390,82 @@ Recovery must not erase configuration. Factory reset must use a separate, harder
 
 Recovery should visibly acknowledge the hold and, where practical, communicate that the device is progressing toward reboot rather than appearing stuck.
 
-Firmware update is an intentional takeover state and must not look like an unexplained connection failure. While the normal renderer is available, the device should show an update/activity presentation. If exact firmware-update progress is not trustworthy, Kivori should show indeterminate activity rather than fake percentage progress. If the renderer becomes unavailable during a low-level update, Kivori should use the simplest reliable hardware indication available, while Kivori Desktop shows update state/progress where possible.
+### 14.2 Application-independent hardware recovery
+
+Production Kivori hardware must provide a recovery path that does not depend on the installed Kivori application firmware being valid.
+
+For the current ESP32-C3 class of hardware, this means exposing a documented mechanism to enter the MCU's ROM/download bootloader and reset the device even when the normal application image cannot boot. The production PCB should preserve an accessible service/user recovery mechanism and test access appropriate to the final enclosure and support model.
+
+Kivori Desktop should be able to detect/support a documented recovery workflow when the device is in this low-level recovery mode.
+
+### 14.3 Recoverable firmware installation
+
+Normal firmware update should use a rollback-safe strategy where supported, such as inactive-slot/A-B installation with post-boot validation.
+
+A failed or invalid new image should recover to the previous known-good firmware automatically when the platform can do so. The ROM/bootloader recovery path remains the last-resort recovery when application-level rollback cannot run.
+
+### 14.4 Update discovery and compatibility
+
+Kivori Desktop is the update coordinator for both desktop and firmware releases.
+
+A release source/manifest should describe enough information to make safe decisions, including:
+
+- desktop version and platform artifacts;
+- firmware version;
+- supported hardware revision(s);
+- minimum/compatible desktop version for firmware;
+- minimum/compatible firmware version for desktop behavior where required;
+- release notes;
+- update importance/severity;
+- artifact integrity/authentication metadata.
+
+Desktop and firmware may version independently, but Kivori must evaluate compatibility before installation.
+
+If both desktop and firmware updates are required, `Update All` must determine and communicate the required dependency order before installing either component.
+
+### 14.5 Desktop application updates
+
+When a desktop update is available, Kivori Desktop should clearly communicate:
+
+- installed version;
+- available version;
+- release notes/important changes;
+- whether the update is optional, recommended, critical, or compatibility-required;
+- whether restart is required.
+
+Desktop update packages must be authenticated before installation.
+
+During an intentional desktop restart/update, the physical Kivori should use the existing intentional Reconnecting/Host Updating semantics rather than presenting the event as an unexplained crash.
+
+### 14.6 Firmware update UX
+
+Firmware update is an intentional takeover state and must not look like an unexplained connection failure.
+
+Before flashing, Kivori Desktop should validate at least:
+
+- target device identity/hardware revision;
+- firmware compatibility with the installed/target desktop version;
+- update artifact authenticity/integrity;
+- usable connection/recovery prerequisites.
+
+Update availability alone must not silently trigger a disruptive firmware flash during normal user activity. Normal/recommended updates should require clear user intent. Future critical/security policy may impose stronger requirements only if explicitly documented.
+
+While the normal renderer is available, the device should show an update/activity presentation. Trustworthy phase/progress may be shown; when exact progress is not trustworthy, Kivori should show indeterminate activity rather than fake percentage progress.
+
+Useful phases include Preparing, Downloading, Firmware Updating, Verifying, Restarting, Restored Previous Firmware, and Recovery Mode where applicable.
+
+If the renderer becomes unavailable during a low-level update, Kivori should use the simplest reliable hardware indication available, while Kivori Desktop shows update state/progress where possible.
+
+### 14.7 Update failure behavior
+
+Update failure must resolve into an understandable path rather than ambiguous silence.
+
+Examples:
+
+- if the previous firmware remains valid, report that the update failed and the previous firmware was restored;
+- if the device enters low-level recovery/ROM bootloader mode, Kivori Desktop should identify recovery mode and offer a restore flow;
+- if the device cannot be detected automatically, Desktop should provide the documented physical bootloader/recovery procedure;
+- failed update state must never be presented as successful solely because the device restarted.
 
 ## 15. Multi-Device Behavior
 
@@ -374,7 +495,11 @@ Required product capabilities:
 - desktop configuration UI;
 - local per-user, per-machine configuration;
 - safe display-idle behavior;
-- software-independent MCU reboot gesture.
+- normal MCU reboot gesture;
+- application-independent low-level firmware recovery path on production hardware;
+- visible desktop/firmware version and update availability;
+- compatibility-aware, authenticated desktop and firmware update flow;
+- rollback/recovery behavior for firmware installation where platform support permits it.
 
 ## 17. MVP Non-Goals
 
@@ -386,12 +511,17 @@ The following are intentionally outside the MVP product contract:
 - workflow orchestration as a flagship concept;
 - automatic inference of arbitrary web apps or scripts from window titles;
 - implicit physical-input chords;
+- implicit OS-style key-repeat for ordinary discrete button mappings;
+- silently mixing opposite rotary directions between unrelated Global and application-profile actions;
 - replaying actions after a connection recovers;
 - multiple simultaneously active Kivori controllers;
 - Passive devices acting as Monitor Mode;
 - driverless macro/media fallback when Kivori Desktop is unavailable;
 - waking the host PC through Kivori;
-- guaranteeing visibility into hardware states the OS/device does not expose.
+- guaranteeing visibility into hardware states the OS/device does not expose;
+- silently flashing normal/recommended firmware updates merely because a newer version exists;
+- installing unauthenticated desktop/firmware artifacts;
+- installing a desktop/firmware pair without validating known compatibility constraints.
 
 ## 18. Product Acceptance Gates
 
@@ -404,7 +534,8 @@ A product increment is aligned with this PRD only if it preserves these invarian
 5. **No hidden execution fallback:** unavailable actions do not silently switch to another mechanism.
 6. **No state invention:** Kivori represents observable state only.
 7. **No passive-device ambiguity:** Passive devices do not behave like Active or Monitor devices.
-8. **Recoverability:** basic hardware recovery remains possible without healthy desktop software.
+8. **Recoverability:** recovery remains possible without healthy desktop software, and production hardware preserves a path that does not depend on valid application firmware.
 9. **No ambiguous silence:** when Kivori can render, user-relevant waiting, processing, restricted, transitional, failure, and recovery states have intentional visual feedback rather than appearing frozen or accidentally blank.
+10. **Compatibility-safe updates:** desktop and firmware updates are authenticated, compatibility-checked, ordered safely, and leave a defined recovery path if installation fails.
 
 Detailed normative behavior and acceptance criteria live in [`docs/user-story-contract.md`](docs/user-story-contract.md).
