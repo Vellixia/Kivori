@@ -69,6 +69,11 @@ The following rules apply across all user stories.
 41. **Composite actions report the composite outcome.** A multi-step macro MUST reflect the outcome of all required steps rather than reporting success because an earlier step succeeded.
 42. **Only observed hardware input is actionable.** Kivori MUST NOT reconstruct or invent rotary detents that the device did not actually observe.
 43. **Workspace transitions are non-profile-owning.** OS virtual-desktop/workspace switch surfaces SHOULD NOT own Kivori profiles; the resulting foreground app follows the normal stabilization/interaction-commit rules.
+44. **Recovery-capable Hold actions are release-qualified.** A mapped Hold action on the primary recovery-capable button MUST NOT execute merely because the Hold threshold is crossed; recovery ownership can supersede it before release.
+45. **Composite confirmation cannot exceed its least-confirmed required step.** If any required macro step is Unverified, the overall composite MUST NOT be presented as confirmed success unless that step later becomes confirmed.
+46. **Input conditioning precedes gesture semantics.** Raw encoder electrical transitions MAY be filtered/decoded before they become logical detents; only validated logical detents participate in direction-reversal and acceleration rules.
+47. **Software test wake preserves idle history.** Waking from Display Sleep for Test Action or Preview Buddy State MUST NOT by itself restart the full ambient-idle progression.
+48. **Overlay classification is conservative and non-invasive.** Kivori SHOULD use OS-observable context and explicit user rules; ambiguous overlay identity MUST fall back to normal focus stabilization rather than hidden/invasive inspection or guessing.
 
 ---
 
@@ -149,6 +154,20 @@ If extremely fast manual rotation causes some physical detents not to be observe
 
 The principle is: **missing input is not failed input.**
 
+### Validated logical detents
+
+Raw electrical edges are not themselves product-level rotary actions.
+
+Firmware/input processing MAY debounce, decode quadrature transitions, reject electrically invalid transition sequences, and otherwise convert raw encoder activity into validated logical detents before gesture semantics are evaluated.
+
+Direction-reversal and acceleration behavior MUST operate on those validated logical detents:
+
+- electrical bounce/noise rejected before logical-detent formation MUST NOT reset acceleration;
+- a validated logical reverse detent MUST reset acceleration to 1x immediately;
+- the gesture layer MUST NOT intentionally ignore a valid reverse detent merely to preserve the existing acceleration multiplier.
+
+This keeps electrical noise handling below the semantic rule while preserving immediate real reversals.
+
 ### Bounded values
 
 When a bounded action reaches its minimum or maximum:
@@ -170,13 +189,15 @@ Example:
 - [ ] App profiles select actions without mutating action meaning.
 - [ ] Rotary actions can define action-specific sensitivity and acceleration.
 - [ ] Acceleration accumulates only across same-direction detents.
-- [ ] Every direction flip resets acceleration to 1x.
+- [ ] Every validated direction flip resets acceleration to 1x.
 - [ ] Rapid oscillation remains effectively baseline unless multiple same-direction detents accumulate.
 - [ ] Precision-oriented actions can disable acceleration.
 - [ ] MVP acceleration never exceeds 5x the action's base step.
 - [ ] Actions can choose a lower acceleration ceiling.
 - [ ] Unobserved/dropped detents are not invented or reconstructed.
 - [ ] High-speed detent loss does not produce Error without positive hardware-fault evidence.
+- [ ] Raw electrical bounce can be filtered before direction semantics.
+- [ ] A genuine validated reverse detent is not suppressed merely to preserve acceleration.
 - [ ] Bounded controls clamp correctly.
 - [ ] Boundary feedback is not repeated for every excess tick.
 - [ ] Reverse movement exits boundary suppression immediately.
@@ -224,16 +245,23 @@ A sequential macro or other multi-step action is one user-level composite action
 
 If a composite action contains required steps:
 
-- all required steps that are verifiable MUST complete successfully before the overall action may be presented as Execution Confirmed/Success;
+- all required confirmation-bearing steps MUST reach the confirmation level needed by the action before the overall action may be presented as Execution Confirmed/Success;
 - positive failure of any required step MUST make the overall action **Error / Partial Failure**, even if earlier steps succeeded;
-- if a later required step's result cannot be determined, the overall result MUST become **Unverified / Partial Outcome Unknown** rather than Success;
+- if any required step is **Triggered / Unverified**, the overall composite MUST be **Triggered / Unverified** unless that step later becomes confirmed;
+- a mixture of Execution Confirmed and Unverified required steps therefore remains **Triggered / Unverified** overall;
+- a composite made entirely of inherently unverifiable required triggers remains **Triggered / Unverified** when no known failure occurs;
+- orchestration-only steps such as a delay do not increase confirmation confidence merely because the delay elapsed;
 - optional/non-required steps MAY be reported separately without changing the overall required-step outcome when their failure is explicitly non-fatal by configuration.
 
-Example:
+Examples:
 
-`Launch App -> Wait/Readiness step -> Send Keystroke`
+`Launch App [Execution Confirmed] -> Hotkey [Unverified]` -> overall **Triggered / Unverified**.
 
-If the launch succeeds but the required readiness/send step is known to fail, the macro result is Error / Partial Failure, not Execution Confirmed.
+`Hotkey 1 [Unverified] -> Delay -> Hotkey 2 [Unverified]` -> overall **Triggered / Unverified**.
+
+`Launch App [Confirmed] -> required readiness/send step [known failure]` -> overall **Error / Partial Failure**.
+
+The overall composite confirmation MUST NOT be stronger than the least-confirmed required step.
 
 ### Initial interactive timing targets
 
@@ -339,7 +367,9 @@ Default transient priority is:
 - [ ] State Confirmed, Execution Confirmed, and Unverified outcomes remain distinct.
 - [ ] Composite actions do not report Success solely because an early required step succeeded.
 - [ ] Known required-step failure becomes Error / Partial Failure.
-- [ ] Unknown required-step outcome becomes Unverified / Partial Outcome Unknown.
+- [ ] Any required Unverified step caps the overall composite at Triggered / Unverified.
+- [ ] A composite of only unverifiable required triggers remains Triggered / Unverified when no known failure occurs.
+- [ ] Mixed confirmed + unverified required steps remain Triggered / Unverified overall.
 - [ ] Timeout logic distinguishes known failure from unknown outcome.
 - [ ] A target app crash during a pending action becomes Error when the crash is known.
 - [ ] Missing callback without known failure becomes Unverified.
@@ -396,16 +426,29 @@ Normal short-press actions are **release-qualified** for MVP.
 
 Initial short-press hold cutoff: **500 ms**.
 
-- button release at or before the cutoff MAY execute the mapped short-press action when the current context otherwise permits it;
-- once key-down exceeds the cutoff, the normal short-press action becomes permanently suppressed for that hold;
-- releasing after the cutoff but before the recovery threshold MUST NOT execute the mapped short-press action;
-- reaching the recovery threshold follows US10's MCU recovery behavior.
+For the primary recovery-capable button, a mapped **Hold** action is also release-qualified rather than firing immediately at threshold.
+
+Initial recovery-ownership threshold: **~2 seconds of continuous hold**. The final MCU recovery threshold remains **~10 seconds total from the original key-down**.
+
+The primary recovery-capable button therefore behaves as follows while awake and normal interaction is available:
+
+- release at or before 500 ms -> mapped short-press action MAY execute;
+- after 500 ms and before ~2 s -> short press is suppressed; a mapped Hold action MAY be armed and the display SHOULD make the pending release behavior understandable;
+- release after 500 ms but before ~2 s -> the mapped Hold action MAY execute if one is configured and current context permits it;
+- reaching ~2 s without release -> any mapped Hold action for that gesture MUST be cancelled before execution and recovery ownership begins;
+- from ~2 s until the ~10 s recovery threshold -> ordinary short/Hold actions remain suppressed and recovery visual feedback owns the gesture;
+- release after recovery ownership begins but before ~10 s -> no mapped desktop action executes;
+- reaching ~10 s total hold -> MCU recovery executes according to US10.
 
 Example:
 
-`button down -> held 9 s -> released before 10 s -> no mapped click action`
+`button down -> 500 ms -> Hold armed, not executed -> 2 s -> recovery owns gesture -> release at 9 s -> no desktop action`
 
-The cutoff is an MVP input-classification rule and SHOULD NOT be user-configurable by profile in MVP.
+This prevents a recovery attempt from causing an irreversible mapped Hold side effect several seconds before the reboot occurs.
+
+The short-press cutoff and recovery-ownership threshold are MVP input-classification rules and SHOULD NOT be user-configurable by profile in MVP.
+
+If the gesture began in Display Sleep, US9's wake-only rule suppresses ordinary short/Hold execution for the entire physical gesture; recovery may still take ownership if the user continues holding.
 
 ### Gesture context ownership
 
@@ -451,12 +494,13 @@ Examples:
 
 Future combinations such as `Hold + Rotate` MAY be introduced only as explicit input types with explicit configuration.
 
-The hardware recovery hold is an explicit exception to ordinary gesture arbitration. While the primary recovery-capable button remains continuously held and its recovery timer is active:
+The hardware recovery hold is an explicit exception to ordinary gesture arbitration. Once recovery ownership begins on the primary button:
 
 - rotary detents MUST NOT cancel or reset the recovery timer;
 - rotary detents MUST NOT execute ordinary mapped rotary actions;
 - rotary detents MUST NOT replace recovery ownership with another gesture;
-- releasing the primary button before the recovery threshold ends the recovery attempt normally.
+- ordinary mapped short/Hold actions for that same button gesture MUST remain cancelled;
+- releasing the primary button before the final recovery threshold ends the recovery attempt normally without executing a mapped action.
 
 This rule makes recovery robust on push-encoders where incidental shaft rotation can occur while the user is holding the encoder down.
 
@@ -491,9 +535,11 @@ For a currently active continuous gesture, the system MAY retain the latest targ
 - [ ] Final display reconciles against confirmed state.
 - [ ] 250 ms without a detent ends a rotary gesture for the initial MVP target.
 - [ ] A short press is eligible only when released within the initial 500 ms cutoff.
-- [ ] A hold exceeding 500 ms cannot fall through into a normal mapped click on release.
-- [ ] Aborted recovery holds do not execute the normal click action.
-- [ ] Focus change mid-gesture does not split one gesture across profiles.
+- [ ] A mapped Hold on the primary recovery-capable button is armed after the Hold threshold but does not execute merely on threshold crossing.
+- [ ] Releasing after 500 ms but before recovery ownership may execute the configured Hold action.
+- [ ] Crossing the initial ~2 s recovery-ownership threshold cancels the mapped Hold for that gesture.
+- [ ] Releasing after recovery ownership begins but before ~10 s executes no mapped desktop action.
+- [ ] A Display Sleep-originated press never executes ordinary short/Hold actions from that same physical gesture.
 - [ ] Known target loss mid-gesture cancels the remaining stream.
 - [ ] Remaining detents after target loss are ignored until that gesture ends.
 - [ ] Target loss does not cause per-detent retargeting to another application.
@@ -501,7 +547,7 @@ For a currently active continuous gesture, the system MAY retain the latest targ
 - [ ] External updates do not visually fight the same continuous value during an active gesture.
 - [ ] Important discrete state changes may still surface during a continuous gesture.
 - [ ] Implicit chord actions are not produced in MVP.
-- [ ] Rotary detents during a recovery hold do not cancel/reset recovery and do not execute ordinary actions.
+- [ ] Rotary detents during recovery ownership do not cancel/reset recovery and do not execute ordinary actions.
 - [ ] Reconnecting/Disconnected cancels an active normal gesture immediately.
 - [ ] Layer 1 connection takeover does not wait for the rotary gesture-end timer.
 - [ ] Inputs during Reconnecting are not replayed after recovery.
@@ -581,16 +627,34 @@ Recognized transient overlays displayed over a stable foreground application SHO
 
 Examples include temporary in-game overlays such as communication, platform, capture, or GPU-control overlays that appear above a borderless/fullscreen game while the game remains the underlying stable activity.
 
-When an overlay is classified as transient/non-profile-owning:
+Overlay classification MUST be conservative and non-invasive.
+
+Kivori Desktop MAY consider multiple ordinary OS-observable signals together, such as:
+
+- current foreground/focus ownership;
+- process/application identity;
+- window owner/root-owner relationships;
+- activation/visibility/tool-window/topmost-style metadata where the platform exposes it;
+- whether the surface is transient or persistent across focus changes;
+- recent foreground-transition history;
+- explicit user-configured overlay classification.
+
+No single generic window style/flag SHOULD be treated as proof that a surface is an overlay.
+
+When an overlay is confidently classified as transient/non-profile-owning:
 
 - the underlying stable application's profile SHOULD remain active;
 - opening or closing the overlay SHOULD NOT restart the 300-500 ms profile-stabilization cycle merely because the overlay surface became visible;
-- Kivori MUST NOT require process injection, anti-cheat hooks, or hidden game instrumentation solely to preserve profile ownership;
+- Kivori MUST NOT require process injection, anti-cheat hooks, memory inspection, or hidden game instrumentation solely to preserve profile ownership;
 - classification SHOULD rely on ordinary OS-observable context and/or explicit user configuration;
 - if the overlay becomes a normal independently focused persistent application/window, normal focus-stabilization rules MAY apply;
 - if the overlay or game context is Protected/restricted, Protected behavior MUST override the underlying game profile.
 
-This rule preserves game-control continuity without requiring invasive hooks that could conflict with anti-cheat systems.
+If overlay classification is ambiguous, Kivori MUST NOT guess that it is transient merely to preserve the game profile. The ambiguous window/context follows the normal focus-stabilization rules unless the user has explicitly configured a supported overlay rule.
+
+An explicit user rule such as **Treat this application/window match as transient overlay** MAY be supported. Such a rule MUST NOT bypass Protected/restricted context classification.
+
+This preserves game-control continuity where the evidence is strong without requiring invasive hooks or turning heuristic window metadata into false certainty.
 
 ### Interaction commits pending focus
 
@@ -679,8 +743,12 @@ MVP operation is scoped to the user's normal interactive session rather than req
 - [ ] Newly visible app after workspace switch uses normal stabilization.
 - [ ] Deliberate Kivori input during workspace-switch stabilization commits the pending app immediately.
 - [ ] Recognized transient in-game overlays preserve the underlying game profile by default.
-- [ ] Overlay handling does not require process injection or anti-cheat hooks solely for profile ownership.
+- [ ] Overlay classification uses non-invasive OS-observable context and/or explicit user rules.
+- [ ] No single generic window flag is sufficient evidence by itself to classify an overlay.
+- [ ] Ambiguous overlay classification falls back to normal focus stabilization rather than guessing.
+- [ ] Overlay handling does not require process injection, memory inspection, or anti-cheat hooks solely for profile ownership.
 - [ ] A persistent independently focused overlay/application may enter normal focus stabilization.
+- [ ] An explicit transient-overlay override does not bypass Protected classification.
 - [ ] Protected overlay/context overrides the game profile.
 - [ ] Deliberate interaction during the stabilization window commits the valid pending normal foreground app before execution.
 - [ ] A pending Protected context enters Protected behavior immediately rather than falling back to General.
@@ -1094,7 +1162,19 @@ When the targeted device is in Display Sleep:
 - a test command MUST NOT bypass Protected, permission, connection, device-assignment, or higher-priority takeover restrictions;
 - a higher-priority takeover state MAY refuse or interrupt a preview when normal preview presentation is inappropriate.
 
-This keeps configuration testing useful while preserving the distinction between physical wake intent and an explicit software test request.
+A software-originated wake from Display Sleep uses a **temporary wake lease** rather than resetting the entire ambient-idle sequence.
+
+Initial post-feedback wake grace target: **~1 second** after the requested preview/test feedback has completed.
+
+During this temporary wake lease:
+
+- the pre-existing idle age SHOULD be preserved;
+- Kivori SHOULD remain visibly awake for the active preview/test feedback plus the short post-feedback grace;
+- if no deliberate physical interaction or higher-priority state occurs, Kivori SHOULD return directly to Display Sleep after the grace period rather than restarting Normal -> Dim -> Low Motion -> Display Sleep;
+- a deliberate physical interaction while the temporary wake lease is active MAY reset normal ambient-idle timing and execute normally because the display is already awake;
+- a higher-priority takeover/urgent state follows its own presentation rules and may extend/replace the temporary test presentation.
+
+This keeps configuration testing visible without repeatedly defeating panel burn-in protection.
 
 ### Display Sleep and hardware recovery hold
 
@@ -1103,15 +1183,15 @@ The hardware recovery detector is out-of-band from ordinary desktop button-actio
 If the primary hardware button is pressed while Kivori is fully in Display Sleep:
 
 - key-down SHOULD wake the display immediately so the device visibly acknowledges the interaction;
-- the ordinary configured button action MUST remain suppressed because the gesture began as a wake gesture;
+- ordinary configured short/Hold actions MUST remain suppressed because the gesture began as a wake gesture;
 - the hardware recovery hold timer MUST continue running independently after the display wakes;
 - incidental rotary movement while the button remains held MUST NOT reset/cancel recovery and MUST NOT execute ordinary rotary actions;
-- if the button remains held for the recovery threshold, the MCU MUST reboot according to US10;
+- if the button remains held through the recovery-ownership and final recovery thresholds, the MCU MUST reboot according to US10;
 - if the user releases before the recovery threshold, the display remains awake and no ordinary desktop action from that press is executed.
 
 Example:
 
-`Display Sleep -> button down -> display wakes -> normal action suppressed -> incidental rotation ignored -> hold reaches ~10 s -> MCU reboot`
+`Display Sleep -> button down -> display wakes -> normal actions suppressed -> incidental rotation ignored -> recovery owns hold -> ~10 s -> MCU reboot`
 
 Early release example:
 
@@ -1145,10 +1225,13 @@ Urgent wake classification SHOULD be narrow and deterministic. It MUST NOT becom
 - [ ] Explicit Preview Buddy State can wake a sleeping display without a physical wake gesture.
 - [ ] Explicit Test Action can wake a sleeping display and execute immediately only when current restrictions permit.
 - [ ] Desktop test commands do not bypass Protected/permission/assignment/takeover restrictions.
+- [ ] Software test/preview wake preserves previous idle age instead of restarting the full ambient progression.
+- [ ] Test/preview wake returns directly to Display Sleep after feedback plus the short grace when no new deliberate interaction occurs.
+- [ ] Physical interaction during the temporary software wake may reset normal ambient timing.
 - [ ] A recovery-button key-down wakes the display immediately from Display Sleep.
 - [ ] Waking the display does not cancel the recovery hold timer.
 - [ ] Incidental rotary detents during the recovery hold do not cancel recovery or execute normal rotary actions.
-- [ ] Releasing a recovery-capable wake press before ~10 s does not execute the ordinary mapped button action.
+- [ ] Releasing a recovery-capable wake press before ~10 s does not execute ordinary mapped short/Hold actions.
 - [ ] Passive incidental events do not wake Display Sleep by default.
 - [ ] Narrowly defined urgent desktop states may wake the display.
 - [ ] Ordinary background state changes do not wake Display Sleep.
@@ -1272,7 +1355,7 @@ Known sleep/lock/session state MUST outrank later generic heartbeat-loss symptom
 
 MVP recovery gesture:
 
-**Hold the primary hardware button for approximately 10 seconds -> force MCU reboot.**
+**Hold the primary hardware button for approximately 10 seconds total from key-down -> force MCU reboot.**
 
 Recovery MUST:
 
@@ -1285,38 +1368,51 @@ Recovery MUST:
 - remain available while the display is in Display Sleep;
 - bypass normal profile/action suppression because it is an out-of-band device recovery path.
 
-While the primary recovery-capable button remains continuously depressed and the recovery timer is active:
+### Recovery ownership and mapped Hold actions
 
+The primary recovery-capable button uses an initial **~2 second recovery-ownership threshold** before the final ~10 second reboot threshold.
+
+Before recovery ownership begins, a configured Hold action MAY be armed but MUST remain release-qualified.
+
+When the continuous hold reaches the recovery-ownership threshold:
+
+- any mapped Hold action for that same gesture MUST be cancelled before execution;
+- recovery becomes the exclusive owner of the button gesture;
 - incidental rotary detents MUST NOT cancel, reset, pause, or restart the recovery timer;
 - incidental rotary detents MUST NOT execute ordinary mapped rotary actions;
-- incidental rotary detents MUST NOT transfer gesture ownership away from recovery;
-- only release of the primary button before threshold ends the recovery attempt under normal operation.
+- ordinary short/Hold actions for that button gesture MUST remain suppressed;
+- releasing before the final threshold ends the recovery attempt without executing a mapped desktop action.
 
-This recovery arbitration takes precedence over the ordinary single-gesture rule because recovery is an escape path rather than a normal configurable input gesture.
+The final ~10 second recovery threshold is measured from the original key-down, not from the ~2 second recovery-ownership transition.
+
+This arbitration takes precedence over ordinary gesture rules because recovery is an escape path rather than a normal configurable input gesture.
 
 ### Recovery hold presentation
 
-When the renderer is available and the recovery-capable hold has crossed the short-press cutoff:
+When the renderer is available:
 
-- Kivori SHOULD visibly communicate that a recovery hold is active;
-- because the recovery threshold itself is deterministic, Kivori MAY show truthful elapsed/remaining hold progress such as a ring or countdown toward reboot;
-- releasing before the recovery threshold SHOULD visibly return to the appropriate underlying device/desktop state without executing the mapped click action;
-- reaching the threshold SHOULD transition into an explicit Rebooting/recovery indication when possible before/reset as the MCU restarts;
-- recovery MUST NOT look like an unexplained ten-second freeze.
+- after the short-press cutoff but before recovery ownership, Kivori SHOULD make an armed mapped Hold action understandable without falsely showing it as already executed;
+- once recovery ownership begins, recovery visual feedback MUST take precedence over any pending Hold-action preview/transient;
+- because the final recovery threshold is deterministic, Kivori MAY show truthful elapsed/remaining hold progress such as a ring or countdown toward reboot;
+- releasing after recovery ownership but before the final threshold SHOULD visibly return to the appropriate underlying device/desktop state without executing the mapped action;
+- reaching the final threshold SHOULD transition into an explicit Rebooting/recovery indication when possible before/reset as the MCU restarts;
+- recovery MUST NOT look like an unexplained multi-second freeze.
 
 When the recovery-capable button is pressed from Display Sleep:
 
 - the display SHOULD wake immediately at key-down;
-- ordinary mapped button execution MUST remain suppressed for that wake gesture;
+- ordinary mapped short/Hold execution MUST remain suppressed for that entire wake gesture;
 - waking the display MUST NOT reset or cancel the recovery hold timer;
-- reaching the recovery threshold MUST reboot the MCU;
-- releasing before the threshold MUST NOT retroactively execute the normal mapped button action.
+- reaching the recovery-ownership threshold MAY transition directly into recovery presentation;
+- reaching the final recovery threshold MUST reboot the MCU;
+- releasing before the final threshold MUST NOT retroactively execute any mapped short/Hold action.
 
 When the button is pressed while already awake/Connected:
 
 - a release within the initial 500 ms short-press window MAY execute the mapped short-press action;
-- once the hold exceeds 500 ms, mapped short-press execution is permanently suppressed for that hold;
-- releasing after 500 ms but before the ~10 s recovery threshold results in no mapped desktop action.
+- after 500 ms but before recovery ownership, release MAY execute the mapped Hold action when configured and permitted;
+- once recovery ownership begins, mapped short/Hold execution is permanently suppressed for that gesture;
+- releasing after recovery ownership but before ~10 s results in no mapped desktop action.
 
 Factory reset MUST use a separate, harder-to-trigger mechanism.
 
@@ -1339,11 +1435,14 @@ If firmware is so compromised that it cannot observe the recovery gesture, this 
 - [ ] Recovery remains available in Passive state.
 - [ ] Recovery remains available during Protected/restricted desktop contexts.
 - [ ] Recovery remains available in Display Sleep and wakes the display immediately on key-down.
-- [ ] Display wake does not interrupt the recovery hold timer.
-- [ ] Rotary detents during a push-encoder recovery hold do not cancel/reset recovery or execute normal rotary mappings.
+- [ ] A mapped Hold on the primary recovery-capable button does not execute merely at threshold crossing.
+- [ ] Releasing before recovery ownership may execute an armed Hold action when configured and permitted.
+- [ ] Crossing recovery ownership cancels the pending Hold action for that gesture.
+- [ ] Recovery visual feedback supersedes pending Hold-action presentation once recovery owns the gesture.
+- [ ] Rotary detents during recovery ownership do not cancel/reset recovery or execute normal rotary mappings.
 - [ ] Recovery hold provides visible in-progress feedback when rendering is available.
-- [ ] A 9-second hold released before recovery does not execute the mapped short-press action.
-- [ ] Early release of a recovery-capable wake press does not execute the mapped button action.
+- [ ] A 9-second hold released after recovery ownership does not execute mapped short/Hold actions.
+- [ ] Display Sleep-originated recovery presses never execute mapped short/Hold actions from that gesture.
 - [ ] Recovery does not erase configuration.
 - [ ] Factory reset is not accidentally triggered by the ordinary recovery gesture.
 
@@ -1380,6 +1479,7 @@ Kivori Desktop SHOULD provide configuration for:
 - custom indicator visibility/order within the allowed custom tier;
 - buddy-state preview;
 - action testing;
+- optional explicit transient-overlay classification rules;
 - firmware updates;
 - configuration reset.
 
@@ -1397,9 +1497,21 @@ When the selected Kivori is in Display Sleep:
 - Test Action SHOULD wake the selected device and MAY execute immediately when the target action is currently permitted;
 - these commands MUST NOT be treated as passive background events;
 - these commands MUST NOT bypass Protected state, missing permissions, unavailable connection, assignment restrictions, or other higher-priority takeover rules;
-- Preview Buddy State MUST NOT execute an ordinary mapped desktop action merely because it woke the display.
+- Preview Buddy State MUST NOT execute an ordinary mapped desktop action merely because it woke the display;
+- the temporary software wake SHOULD preserve the device's pre-existing idle age and return directly to Display Sleep after feedback plus the configured/product grace unless deliberate physical interaction or a higher-priority state occurs.
 
 The configuration UI SHOULD make a blocked test distinguishable from a test that was actually dispatched.
+
+### Overlay classification overrides
+
+Kivori Desktop MAY expose an advanced rule such as **Treat this application/window match as transient overlay** for cases where ordinary OS metadata is insufficient.
+
+Such an override:
+
+- SHOULD be explicit and inspectable by the user;
+- MUST NOT rely on process injection or hidden anti-cheat/game hooks;
+- MUST NOT bypass Protected/restricted-context classification;
+- SHOULD be scoped narrowly enough to avoid turning unrelated windows from the same host process into overlays accidentally.
 
 ### Machine scope
 
@@ -1450,7 +1562,9 @@ Future multi-device roles MAY be introduced only through explicit assignment sem
 - [ ] Normal-to-Dim, Dim-to-Low-Motion, and Low-Motion-to-Display-Sleep timings are independently configurable within safe limits.
 - [ ] Preview Buddy State can explicitly wake a selected sleeping device without executing a mapped action.
 - [ ] Test Action can explicitly wake a selected sleeping device when testing is otherwise permitted.
+- [ ] Test/preview software wake preserves idle history and returns to Display Sleep unless new deliberate activity occurs.
 - [ ] Test/preview commands do not bypass Protected/permission/connection/assignment restrictions.
+- [ ] Explicit overlay rules can be configured without invasive hooks and cannot bypass Protected classification.
 - [ ] System/privacy indicator priority cannot be overridden by custom app indicator ordering.
 - [ ] Profiles are scoped per machine and OS user in MVP.
 - [ ] Desktop background behavior continues without the configuration window being visible.
@@ -1480,25 +1594,27 @@ Future multi-device roles MAY be introduced only through explicit assignment sem
 | --- | ---: |
 | Local input acknowledgement | < 50 ms |
 | Short-press maximum hold | 500 ms |
+| Recovery-ownership hold threshold | ~2 s |
 | Delayed/processing indication | ~500 ms |
 | Ordinary interactive unresolved timeout | ~1,500 ms |
 | Success transient | ~800 ms |
 | Triggered/Unverified transient | ~1,200 ms |
 | Error/Failed transient | ~2,000 ms |
+| Desktop test post-feedback wake grace | ~1 s |
 | Passive stable-focus commit | 300-500 ms |
 | Rotary acceleration inactivity reset | 250 ms |
 | Rotary gesture-end inactivity | 250 ms |
 | Lower-priority indicator promotion stabilization | ~250 ms |
 | Host startup/resume grace | 15-30 s |
-| Hardware recovery hold | ~10 s |
+| Hardware recovery reboot threshold | ~10 s total from key-down |
 
 These values are validation targets, not protocol constants. Tuning them MUST preserve the semantics defined by the relevant user story.
 
 A deliberate Kivori interaction is not required to wait out the passive 300-500 ms focus-stabilization target when a valid pending foreground application is known; that interaction commits the pending context immediately after security/protection classification.
 
-A direction reversal resets acceleration immediately even when the prior direction has not been idle for 250 ms.
+A direction reversal resets acceleration immediately even when the prior direction has not been idle for 250 ms, but only after the input layer has formed a validated logical reverse detent.
 
-Acceleration builds only while detents continue in the same direction; repeated direction flips therefore repeatedly restart at baseline.
+Acceleration builds only while validated detents continue in the same direction; repeated valid direction flips therefore repeatedly restart at baseline.
 
 Initial MVP rotary acceleration multiplier ceiling: **5x the action's base step**. Actions may choose a lower ceiling or disable acceleration, but MUST NOT exceed 5x in MVP.
 
@@ -1506,7 +1622,9 @@ A rotary wake gesture remains one wake-only gesture until the 250 ms rotary gest
 
 Lower-priority secondary indicators use an initial ~250 ms promotion-stabilization target; higher-priority escalation is not delayed by that timer.
 
-Once a button hold exceeds the initial 500 ms short-press cutoff, normal mapped short-press execution remains suppressed for the rest of that hold, even if recovery is later aborted before ~10 s.
+For the primary recovery-capable button, crossing 500 ms suppresses short press, while crossing the initial ~2 s recovery-ownership threshold cancels any still-pending mapped Hold action. The final ~10 s reboot threshold remains measured from the original key-down.
+
+Software-originated Test Action / Preview Buddy State wake uses the initial ~1 s post-feedback grace and preserves prior idle age rather than restarting the full ambient sequence.
 
 # 6. Default Priority References
 
@@ -1543,6 +1661,8 @@ When rendering is available, the product SHOULD preserve this presentation inten
 5. primary buddy state;
 6. secondary indicators.
 
+Once recovery ownership begins, recovery presentation outranks any pending mapped Hold preview for the same button gesture.
+
 This priority does not authorize false progress or hidden state mutation; it only governs which truthful information gets visual precedence.
 
 # 7. MVP Boundaries
@@ -1557,15 +1677,19 @@ The following are explicitly outside this contract's MVP guarantees:
 - implicit simultaneous-input chords;
 - acceleration above 5x the configured action base step;
 - reconstructing rotary detents the hardware did not observe;
+- treating raw invalid electrical bounce as a semantic rotary reversal;
 - profile ownership by virtual-desktop/workspace transition UI;
-- user-configurable short-press cutoff in MVP;
+- user-configurable short-press or recovery-ownership threshold in MVP;
+- firing a primary-button mapped Hold action merely because its threshold is crossed before the gesture's recovery intent is known;
 - replaying physical input after communication recovery;
 - delaying Reconnecting/Disconnected takeover presentation until an active rotary gesture naturally ends;
 - replaying historical Success/Error presentation transients after reconnection;
 - automatic restart of an uncertain long-running host action after device reconnection;
 - silent retargeting of a gesture after its committed application disappears;
 - continuing application-scoped execution after known target loss within the same gesture;
-- process injection, anti-cheat hooks, or hidden game instrumentation solely to preserve profile ownership across transient overlays;
+- process injection, memory inspection, anti-cheat hooks, or hidden game instrumentation solely to preserve profile ownership across transient overlays;
+- assuming one generic OS window flag proves that a surface is a transient overlay;
+- restarting the full ambient-idle sequence solely because a desktop Test Action / Preview Buddy State temporarily woke Display Sleep;
 - multiple simultaneously Active Kivori controllers;
 - Passive devices acting as Monitor Mode;
 - driverless macro/media fallback without Kivori Desktop;
