@@ -6,7 +6,7 @@
 **Behavior contract**: [`./user-story-contract.md`](./user-story-contract.md)  
 **Current foundation**: [`./architecture.md`](./architecture.md), [`../specs/001-device-connection-foundation/research.md`](../specs/001-device-connection-foundation/research.md)
 
-**Purpose**: Research technical approaches that can implement the Kivori PRD and User Story Contract on the current repository foundation, with explicit consideration for Windows, macOS, Linux/X11, Linux/Wayland, ESP32-C3 firmware, release/update delivery, hardware recovery, and validation constraints. Each research item is stated as **Decision · Rationale · Alternatives · Caveats**, following the style of the Feature 001 research document.
+**Purpose**: Research technical approaches that can implement the Kivori PRD and User Story Contract on the current repository foundation, with explicit consideration for Windows, macOS, Linux/X11, Linux/Wayland, ESP32-C3 firmware, release/update delivery, hardware recovery, permissions, multi-user ownership, and validation constraints. Each research item is stated as **Decision · Rationale · Alternatives · Caveats**, following the style of the Feature 001 research document.
 
 This document is **non-normative technical guidance**. The PRD and User Story Contract define what users must be able to rely on. A technical recommendation here is a researched starting point, not an immutable implementation mandate. It may be challenged or replaced during implementation when platform documentation, prototype results, hardware measurements, security findings, maintainability evidence, dependency constraints, or automated/manual testing demonstrate a better approach, provided the relevant PRD/User Story behavior remains satisfied. Material architectural deviations should be recorded in an ADR or by updating this research.
 
@@ -31,15 +31,15 @@ Recommendation labels used below:
 
 **Caveats**: Feature 001 solves device connection and canonical rendering, not the whole product contract. Existing state types and the current `Orchestrator` must not be expanded into catch-all product state merely because they already exist.
 
-## R-2. Keep the Tauri desktop application as the per-user host process
+## R-2. Keep Tauri as the per-user product host, but do not assume it can always own the USB device directly
 
-**Decision**: **SUGGESTED** — continue using the Tauri v2 native Rust process as the per-user Kivori host for MVP. Do not introduce a privileged machine-wide service/daemon solely to implement product features.
+**Decision**: **SUGGESTED / CONDITIONAL** — continue using the Tauri v2 native Rust process as the per-user Kivori application host for MVP product logic. Direct serial ownership by that process is acceptable on ordinary single-user machines, but the architecture must leave room for a small machine-level hardware broker if robust Fast User Switching or cross-session update ownership cannot be guaranteed from per-user processes.
 
-**Rationale**: The current device thread already survives window hide/reload because its lifetime is tied to the native process rather than the webview. Tauri provides the system/webview separation Kivori needs: privileged OS/device integration remains in Rust while React receives a narrow typed IPC surface. Optional start-at-login can be implemented using Tauri's autostart support rather than a custom service.
+**Rationale**: The current device thread already survives window hide/reload because its lifetime is tied to the native process rather than the webview. Tauri provides the desired system/webview separation: privileged OS/device integration remains in Rust while React receives a narrow typed IPC surface. However, a per-user process can be suspended while retaining an exclusive serial handle; an incoming user's process cannot force that handle closed from user space.
 
-**Alternatives**: A machine-wide broker/service that owns all Kivori hardware and serves per-user clients. This could become justified later if Fast User Switching, cross-session update coordination, or hardware ownership cannot be made reliable with per-user processes.
+**Alternatives**: Introduce a privileged machine-wide broker immediately. **CANDIDATE**, not the default yet. It becomes justified if validation shows the product cannot meet deterministic active-user ownership with pre-switch release alone. Another alternative is to declare Fast User Switching unsupported, which is a product-policy choice rather than a technical fix.
 
-**Caveats**: Multi-user machines create a real ownership problem: several logged-in users can have Kivori processes alive simultaneously. R-7 defines a `SessionOwnershipGate`; real Fast User Switching tests must decide whether a broker is eventually necessary.
+**Caveats**: “No service for MVP” is no longer a hard recommendation. The decision should be evidence-driven by R-7/R-74 validation. A future broker should remain minimal: hardware/session arbitration and update ownership, not a second copy of AppCore or user configuration.
 
 ## R-3. Build a modular AppCore rather than growing `device_task` into a god loop
 
@@ -81,15 +81,15 @@ Recommendation labels used below:
 
 **Caveats**: Capability detection itself can become stale. Backends should refresh when relevant OS services, permissions, audio devices, compositor sessions, or desktop environments change.
 
-## R-7. Add a cross-platform SessionOwnershipGate before DeviceRegistry acquisition
+## R-7. SessionOwnershipGate is necessary but only a best-effort solution when the USB handle lives in a per-user process
 
-**Decision**: **SUGGESTED** — only the Kivori process belonging to the active interactive OS session should be eligible to acquire physical Kivori serial devices. An inactive user's process should release hardware, invalidate session-private presentation, and stop competing for the port until its session becomes active again.
+**Decision**: **SUGGESTED with explicit limitation** — only the Kivori process belonging to the active interactive OS session should be eligible to acquire physical Kivori serial devices. The outgoing process should release hardware and invalidate private presentation on session-resign notifications. This is the normal-path solution, not a hard ownership guarantee if the OS freezes that process before it closes the handle.
 
-**Rationale**: Windows Fast User Switching documentation explicitly calls out serial ports/shared resources as resources applications must release across session switches. macOS session-switch notifications exist because switched-out applications continue running, and Apple warns against assuming exclusive hardware ownership. Linux `systemd-logind` exposes which session is active. The User Story privacy requirements are easier to enforce by preventing inactive sessions from owning the device rather than cleaning up after accidental cross-user use.
+**Rationale**: Windows Fast User Switching documentation explicitly calls out serial ports/shared resources as resources applications must release across session switches. macOS session-switch notifications exist because switched-out applications continue running, and Apple warns against assuming exclusive hardware ownership. Linux `systemd-logind` exposes which session is active. But Windows communications resources are opened with exclusive access; an already-open handle remains exclusive until the owning process closes it. If that process is suspended first, an incoming user cannot simply open the same COM port.
 
-**Alternatives**: Let every per-user process repeatedly race to open the serial port and rely on “port busy.” Rejected because it creates ambiguous Waiting/Disconnected states and can expose the prior user's presentation longer than allowed.
+**Alternatives**: A machine-level `HardwareBroker` that owns the physical Kivori continuously and routes access/state to the active user session. This is now a first-class **CANDIDATE** for products that promise robust Fast User Switching. Letting per-user processes race on `EBUSY` remains rejected as a correctness strategy, though bounded retry is still useful during normal handoff races.
 
-**Caveats**: The transition has races: the incoming session may start before the outgoing process has released the port. Acquisition must tolerate a short bounded “port still owned” interval without treating the hardware as failed. Cross-session updater behavior also needs separate validation.
+**Caveats**: Access-control changes do not revoke an already-open handle reliably. Validation must explicitly test forced/suspended old-session cases, not only graceful WTS/AppKit/logind notifications. If a hard guarantee is required and per-user ownership fails this test, choose the broker or narrow the supported product behavior.
 
 ## R-8. Replace `first_candidate()` with DeviceRegistry + one DeviceActor per physical device
 
@@ -99,7 +99,7 @@ Recommendation labels used below:
 
 **Alternatives**: Keep one open serial device and ignore extras. Rejected because ignored devices cannot show Passive/Unassigned truth and cannot be selected reliably in configuration.
 
-**Caveats**: macOS serial enumeration can expose both callout (`/dev/cu.*`) and tty (`/dev/tty.*`) nodes for one physical device; Linux metadata can vary with `libudev`; Windows COM numbering changes. Registry identity must come from verified device handshake identity, not port path alone.
+**Caveats**: macOS serial enumeration can expose both callout (`/dev/cu.*`) and tty (`/dev/tty.*`) nodes for one physical device; Linux metadata can vary with `libudev`; Windows COM numbering changes. Registry identity must come from verified device handshake identity after the application protocol is available, not port path alone.
 
 ## R-9. Give every physical Kivori a stable unique identity
 
@@ -109,7 +109,7 @@ Recommendation labels used below:
 
 **Alternatives**: Use USB port name, VID/PID, or the current short FNV display hash as the persistent key. Rejected: port paths are unstable, VID/PID identifies a model rather than a unit, and the short hash is intended as a privacy-safe UI/log hint rather than a database primary key.
 
-**Caveats**: Device identity is not automatically an authentication credential. If identity later participates in trust/security, provisioning and cryptographic identity need a separate threat model.
+**Caveats**: Device identity is not automatically an authentication credential. If identity later participates in trust/security, provisioning and cryptographic identity need a separate threat model. During ROM bootloader flashing the application-level DeviceId may be unavailable; R-75 addresses temporary physical binding during that phase.
 
 ## R-10. Preserve the current protocol and extend it through version/capability negotiation
 
@@ -117,13 +117,13 @@ Recommendation labels used below:
 
 **Rationale**: The existing framing already supplies COBS resynchronization, CRC, protocol major/minor versioning, sequence classification, and a capability bitset. The message enum is intentionally append-only because postcard uses variant order as the wire tag. This is a good base for new input, presentation, device-status, and firmware-update messages.
 
-**Alternatives**: Switch to JSON, protobuf, USB HID reports, or a new RPC framework for product vNext. None currently solves a demonstrated deficiency large enough to justify replacing shared/tested framing.
+**Alternatives**: Switch to JSON, protobuf, USB HID reports, or a new RPC framework for product vNext. None currently solves a demonstrated deficiency large enough to justify replacing shared/tested framing. Moving to HID also would not by itself eliminate all Linux device-node policy concerns and would require different hardware/USB capability than the current fixed ESP32-C3 USB Serial/JTAG interface.
 
 **Caveats**: The current capability set is empty. Concrete capability bits need central allocation and tests proving older peers ignore unavailable additive behavior safely.
 
 ## R-11. Separate ephemeral/latest-wins traffic from reliable update transactions
 
-**Decision**: **SUGGESTED** — normal interaction and presentation traffic should remain ephemeral/current-truth oriented, while firmware transfer gets an explicit reliable transaction protocol with image ID, offsets, acknowledgements, integrity checks, and abort/resume semantics.
+**Decision**: **SUGGESTED** — normal interaction and presentation traffic should remain ephemeral/current-truth oriented, while firmware transfer gets an explicit reliable transaction protocol with image ID, offsets, acknowledgements, integrity checks, and abort/resume semantics when application-level updating is used.
 
 **Rationale**: The User Story Contract prohibits stale action replay. A detent lost during disconnect must not execute five seconds later. Conversely, firmware bytes cannot simply be dropped because a sequence gap occurred. The current sequence tracker detects duplicate/gap/wrap but is not a general retransmission layer.
 
@@ -139,7 +139,7 @@ Recommendation labels used below:
 
 **Alternatives**: Send only `Rotate(+1)` / `ButtonPressed` with no gesture identity. Rejected because Desktop would have to reconstruct ownership from transport timing and could disagree with firmware during stalls.
 
-**Caveats**: Very fast rotary input may be batched to reduce framing overhead, but batching must retain direction/order and enough timing information for the configured acceleration semantics.
+**Caveats**: Very fast rotary input may be batched to reduce framing overhead, but batching must retain direction/order and enough timing information for the configured acceleration semantics. Invalid electrical transitions should never be encoded as logical reverse detents merely because the decoder needs a value.
 
 ## R-13. Keep semantic presentation on the wire; do not stream pixels in normal operation
 
@@ -159,17 +159,17 @@ Recommendation labels used below:
 
 **Alternatives**: Perform all gesture timing on Desktop. Rejected for recovery/wake reliability. Perform all acceleration/action mapping in firmware. Rejected because it couples device firmware to host profiles and action configuration.
 
-**Caveats**: If hardware measurements show Desktop-computed acceleration introduces unacceptable latency/jitter, the placement can be revisited while retaining a clear semantic configuration boundary.
+**Caveats**: “Firmware owns input conditioning” is the stable boundary; PCNT, GPIO interrupts, sampling, RC/Schmitt conditioning, and decoder implementation remain challengeable technical choices.
 
-## R-15. HW-040 decoding: compare ESP32-C3 PCNT against GPIO-interrupt software quadrature
+## R-15. HW-040 decoding: PCNT alone is not a sufficient debounce plan for millisecond mechanical bounce
 
-**Decision**: **SPIKE REQUIRED** — treat ESP32-C3 PCNT as the leading candidate, not a mandate. Measure the actual HW-040 electrical behavior and compare PCNT + glitch filtering against GPIO edge interrupts + a software quadrature state machine.
+**Decision**: **SPIKE REQUIRED** — do not treat ESP32-C3 PCNT by itself as the leading complete solution for an HW-040. Compare at least: (A) GPIO edge/sampling + a Gray-code/quadrature state machine; (B) PCNT after external electrical conditioning such as suitable RC/Schmitt cleanup; and (C) a hybrid in which hardware counting is accepted only after stable/valid state qualification.
 
-**Rationale**: `esp-hal`'s PCNT module explicitly supports edge counting and includes a quadrature-encoder example. Hardware counting can reduce missed high-speed edges and separate electrical filtering from gesture semantics. However HW-040 modules vary in bounce, detents-per-cycle, pull-up quality, and mechanical behavior.
+**Rationale**: `esp-hal` PCNT provides useful hardware edge counting and quadrature support, but its filter threshold is bounded to 1023 APB cycles. At an 80 MHz APB clock that is about 12.8 µs, far below the millisecond-scale bounce commonly seen in inexpensive mechanical encoders. Therefore the PCNT glitch filter can reject very short glitches but cannot be assumed to debounce an HW-040 mechanical wiper by itself.
 
-**Alternatives**: Poll GPIOs in the main render loop. Rejected as the default because it couples input capture to rendering/transport load and is more likely to miss high-speed transitions.
+**Alternatives**: Poll GPIOs in the main render loop. Rejected because it couples input capture to rendering/transport load. PCNT-only is also rejected **unless physical measurements of the exact encoder/electrical network demonstrate that post-board signals are already clean enough**.
 
-**Caveats**: PCNT is currently behind `esp-hal`'s `unstable` feature. Pin the HAL version and isolate decoder-specific code. A valid logical reverse detent must still reset acceleration immediately; filtering must reject electrical noise, not “protect” acceleration from genuine reversal.
+**Caveats**: Hardware conditioning changes BOM/pin electrical behavior and must be validated against maximum rotation speed. Software decoding must preserve true single-detent reversals while rejecting invalid Gray-code transitions. The decoder should expose invalid-transition/quality counters for diagnostics rather than inventing motion.
 
 ## R-16. Implement button/recovery behavior as a firmware gesture state machine
 
@@ -181,15 +181,15 @@ Recommendation labels used below:
 
 **Caveats**: Exact intermediate hold timing is a UX target and may change after hardware/user testing. The state machine should expose recovery progress semantically so rendering does not depend on duplicating timer logic elsewhere.
 
-## R-17. Compute action-specific rotary acceleration from validated device timing
+## R-17. Compute action-specific rotary acceleration only from validated observed detents; unobserved motion is unknowable
 
-**Decision**: **SUGGESTED** — firmware reports validated detents/gesture timing; Desktop's binding/action layer computes base step, sensitivity, same-direction acceleration, 5× ceiling, and precision-mode disabling.
+**Decision**: **SUGGESTED** — firmware reports validated detents/gesture timing and optional input-quality diagnostics; Desktop's binding/action layer computes base step, sensitivity, same-direction acceleration, 5× ceiling, and precision-mode disabling. The acceleration engine must never infer missing physical detents or reinterpret an invalid electrical transition as a direction change.
 
-**Rationale**: The same physical gesture can intentionally have different semantics by action. Keeping acceleration configuration near the action definition avoids pushing profile data into firmware. Device timing still prevents host scheduling jitter from inventing detent cadence.
+**Rationale**: The same physical gesture can intentionally have different semantics by action. Keeping acceleration configuration near the action definition avoids pushing profile data into firmware. But once a physical detent was never observed, neither firmware nor Desktop can reliably determine that it happened. Missing same-direction detents should simply under-estimate velocity. A reverse detent that survives input conditioning is a real semantic reversal and resets acceleration to 1×.
 
-**Alternatives**: Firmware computes only a universal acceleration multiplier. Candidate if latency measurements demand it, but it would need host-provided gesture policy and careful synchronization whenever profiles change.
+**Alternatives**: Ignore isolated reverse detents at high speed to “protect” acceleration. Rejected because it would suppress genuine precision reversal. Reconstruct dropped ticks from timing or motor-like velocity models. Rejected because a hand-driven encoder provides insufficient evidence.
 
-**Caveats**: The implementation must define batching behavior so a rapid batch does not erase intermediate direction reversals. A batch of deltas should preserve ordered segments or equivalent information.
+**Caveats**: If firmware detects a high rate of invalid transitions/overflow, Desktop may conservatively reduce or disable acceleration for that gesture, but it must not fabricate ticks. Batching must preserve ordered direction segments. If host-side calculation creates unacceptable latency/jitter, placement may be revisited without changing the observed-input rule.
 
 ## R-18. Use typed action attempts/outcomes, not `execute() -> bool`
 
@@ -329,7 +329,7 @@ Recommendation labels used below:
 
 **Alternatives**: Poll frontmost application or use Accessibility for everything. Polling is unnecessary; universal Accessibility permission would be over-privileged.
 
-**Caveats**: Window-title/window-role matching is a separate capability and may require Accessibility. Keep app-level and window-level context capabilities distinct in the UI.
+**Caveats**: Window-title/window-role matching is a separate capability and may require Accessibility. Keep app-level and window-level context capabilities distinct in the UI. R-76 defines callback/run-loop discipline so these notifications do not execute product work on the GUI thread.
 
 ## R-32. macOS window-level context: Accessibility is permission-gated
 
@@ -341,15 +341,15 @@ Recommendation labels used below:
 
 **Caveats**: Accessibility can be revoked while Kivori is running. Capability state must refresh and affected actions should become Permission Required without breaking unrelated system controls.
 
-## R-33. macOS Spaces and user-session transitions: NSWorkspace notifications
+## R-33. macOS Spaces and user-session transitions: NSWorkspace notifications with reconcile-after-callback semantics
 
-**Decision**: **SUGGESTED** — observe `activeSpaceDidChangeNotification`, `sessionDidResignActiveNotification`, `sessionDidBecomeActiveNotification`, and wake/sleep-related workspace notifications. Treat the Spaces transition itself as non-profile-owning and feed session-active state into `SessionOwnershipGate`.
+**Decision**: **SUGGESTED** — observe `activeSpaceDidChangeNotification`, `sessionDidResignActiveNotification`, `sessionDidBecomeActiveNotification`, and wake/sleep-related workspace notifications, but treat callbacks as event ingress only. Copy minimal identity/timestamp data into a bounded queue and let `ContextEngine`/`SessionOwnershipGate` perform stabilization and reconciliation outside the callback.
 
-**Rationale**: These public AppKit signals align directly with User Story semantics: stabilize the newly active app after a Space change and relinquish hardware before the user's session switches out.
+**Rationale**: These public AppKit signals align directly with User Story semantics: stabilize the newly active app after a Space change and relinquish hardware before the user's session switches out. Keeping callback work tiny protects the AppKit/Tauri main run loop from database, serial, rendering, or platform-query stalls.
 
-**Alternatives**: Private Spaces APIs to enumerate/control workspaces. Rejected for baseline behavior.
+**Alternatives**: Execute profile resolution/device I/O directly inside `NSWorkspace` notification callbacks. Rejected because AppKit/Tauri GUI progress must not depend on those operations. Private Spaces APIs remain rejected for baseline behavior.
 
-**Caveats**: Apple documents that switched-out processes continue running; hardware release/acquisition can race between sessions. DeviceRegistry must tolerate transient busy ports.
+**Caveats**: Event delivery may be delayed/coalesced under load. After the 300–500 ms passive stabilization window, read current frontmost/session truth again before committing rather than blindly trusting an old notification. Registration/teardown that requires main-thread access should use Tauri's main-thread mechanism.
 
 ## R-34. macOS system audio: Core Audio, but validate controllable-volume semantics
 
@@ -491,15 +491,15 @@ Recommendation labels used below:
 
 **Caveats**: Kivori's own DND preference remains available regardless of OS integration. OS-level DND awareness is an optional capability.
 
-## R-48. Cross-platform serial discovery: keep `serialport`, add normalization
+## R-48. Cross-platform serial discovery: keep `serialport`, normalize physical devices, and treat Linux access policy as installation work
 
-**Decision**: **SUGGESTED** — retain the current `serialport` transport unless measurements uncover a problem, but add a normalization layer between OS enumeration and DeviceRegistry.
+**Decision**: **SUGGESTED** — retain the current `serialport` transport unless measurements uncover a problem, but add a normalization layer between OS enumeration and DeviceRegistry. On Linux, do not attempt a runtime permission “bypass”; provision device access during installation using the supported seat/udev mechanism where available, with explicit fallback guidance for other distributions.
 
-**Rationale**: `serialport` supports Windows/macOS/Linux and current production code is already built/tested around its blocking handle on a dedicated thread. The old Feature 001 research preferred `tokio-serial`, but implementation evidence selected blocking `serialport`; that is a useful example of research being challengeable.
+**Rationale**: `serialport` supports Windows/macOS/Linux and current production code is already built/tested around its blocking handle on a dedicated thread. Linux `systemd-logind`/udev supports the `uaccess` tag, whose access is tied to the active seat/session. This aligns with Kivori's user-isolation model better than requiring a permanent broad `dialout` membership for every installation. The old Feature 001 research preferred `tokio-serial`, but implementation evidence selected blocking `serialport`; that is a useful example of research being challengeable.
 
-**Alternatives**: Rewrite to async `tokio-serial`. Rejected without evidence; a dedicated blocking actor is a valid concurrency model and avoids async serial platform quirks.
+**Alternatives**: Permanent `dialout`/`plugdev` group setup is a compatibility fallback where distro policy requires it. World-writable `MODE="0666"` is rejected. Running Kivori Desktop as root or shipping setuid code solely for serial access is rejected. Switching transports to HID solely to avoid CDC permissions is also not a sufficient argument: Linux HID/raw-device access can still be policy-controlled, and current ESP32-C3 hardware exposes fixed USB Serial/JTAG rather than a general application-defined HID endpoint.
 
-**Caveats**: Linux's richer enumeration normally uses `libudev`; macOS reports callout and tty forms; permissions differ across distributions. Normalize one physical Kivori before starting handshake actors, then trust handshake identity over path metadata.
+**Caveats**: A Kivori-specific udev rule must identify the intended physical device/interface narrowly enough not to grant access to unrelated Espressif development boards that share vendor/product identity. Before the Kivori application handshake is available, stable USB metadata may be limited; this needs a packaging/device-identification spike. macOS reports callout and tty forms; Windows COM numbering changes. Normalize one physical Kivori before starting handshake actors, then trust verified handshake identity over path metadata.
 
 ## R-49. Native-core-owned, schema-versioned, atomic configuration persistence
 
@@ -511,15 +511,15 @@ Recommendation labels used below:
 
 **Caveats**: Do not let a persistence choice leak into the User Story contract. If SQLite adds packaging/MSRV complexity before it pays for itself, start simpler and migrate deliberately.
 
-## R-50. Keep platform-specific runtime loops thread-aware
+## R-50. Keep platform-specific runtime loops thread-aware; GUI callbacks are ingress, not work queues
 
-**Decision**: **SUGGESTED** — do not force all OS integrations into one Tokio task model. Allow dedicated platform event threads/run loops (Windows message/COM thread, macOS AppKit/main-thread bridge, Linux D-Bus/logind loop, PipeWire loop) feeding bounded typed events into AppCore. Use Tauri/Tokio async runtime where it naturally fits.
+**Decision**: **SUGGESTED** — do not force all OS integrations into one Tokio task model. Allow dedicated platform event threads/run loops (Windows message/COM thread, macOS AppKit/main-thread bridge, Linux D-Bus/logind loop, PipeWire loop) feeding bounded typed events into AppCore. On macOS in particular, register AppKit/NSWorkspace observers on the appropriate main-thread context, then keep notification callbacks minimal and non-blocking.
 
-**Rationale**: Several native APIs have thread affinity, message-loop, COM apartment, or callback requirements. The current dedicated device thread already demonstrates that “native owned thread + typed channel” is compatible with Tauri.
+**Rationale**: Several native APIs have thread affinity, message-loop, COM apartment, or callback requirements. The current dedicated device thread already demonstrates that “native owned thread + typed channel” is compatible with Tauri. Tauri exposes `run_on_main_thread`, while NSWorkspace activation/session notifications are event sources rather than places to run serial/database/profile work.
 
-**Alternatives**: `tokio::spawn` every subsystem. Rejected as a blanket rule, not because Tokio is unsuitable generally.
+**Alternatives**: `tokio::spawn` every subsystem, or perform AppCore work synchronously inside native callbacks. Both are rejected as blanket rules.
 
-**Caveats**: Event ordering matters for focus/session changes. Each backend should define its ordering/reconciliation strategy rather than assuming cross-thread delivery timing is identical across OSes.
+**Caveats**: Callback-to-AppCore channels should be bounded. High-rate/redundant focus events may coalesce to latest truth instead of blocking the GUI run loop. Context commitment should reconcile current frontmost/session state after stabilization so delayed notifications cannot commit stale context.
 
 ## R-51. Refine offline-first: isolate network access to UpdateManager, never core operation
 
@@ -551,15 +551,15 @@ Recommendation labels used below:
 
 **Caveats**: The manifest endpoint is not a cloud dependency for normal operation. Cached/failed update checks must never degrade control functionality.
 
-## R-54. Firmware update option A: Desktop-managed ESP ROM flashing
+## R-54. Firmware update option A: Desktop-managed ESP ROM flashing must be a USB re-enumeration state machine, not a fixed-port operation
 
-**Decision**: **CANDIDATE** — treat Desktop-managed ROM flashing as the lower-complexity early firmware-update path. Download/authenticate firmware in Desktop, intentionally close the Kivori app session, enter ESP32-C3 download mode, flash, reset, and require a fresh Kivori handshake.
+**Decision**: **CANDIDATE** — treat Desktop-managed ROM flashing as the lower-complexity early firmware-update path, but design `UpdateCoordinator` around intentional USB disappearance/re-enumeration. Download/authenticate firmware, acquire an update lease, close the normal DeviceActor/session, enter ESP32-C3 USB Serial/JTAG download mode using the correct reset mechanism, rediscover the expected ROM-mode device by stable physical/topology evidence, flash, reset, rediscover the application-mode device, and verify the original Kivori DeviceId plus expected firmware version.
 
-**Rationale**: ESP32-C3 contains an immutable ROM downloader and native USB Serial/JTAG supports flashing. `espflash` is available as both CLI/library and Kivori already uses it for development flashing, reducing the amount of new device-side flash logic/protocol required.
+**Rationale**: ESP32-C3 contains an immutable ROM downloader and native USB Serial/JTAG supports flashing. `esptool` has USB-Serial/JTAG-specific reset handling and documents cases where reset causes the port to re-enumerate under a new `/dev/ttyACM*` name. Therefore `COM7`/`ttyACM0` cannot be the update transaction's identity. The ROM loader also does not expose Kivori's application handshake DeviceId, so temporary binding needs OS USB location/topology metadata until application firmware returns.
 
-**Alternatives**: Application-level A/B update (R-55). More robust but substantially more firmware/bootloader/partition complexity.
+**Alternatives**: Application-level A/B update (R-55). More robust but substantially more firmware/bootloader/partition complexity. Passing a fixed serial path straight to `espflash` and hoping it survives reset is rejected.
 
-**Caveats**: ROM flashing interrupts normal Kivori rendering, lacks automatic previous-slot rollback, and power loss can leave the application image unusable until recovery. Desktop must show explicit progress because the device display may be unavailable. Dependency integration also needs an MSRV spike: current `espflash` releases may require a newer Rust toolchain than Kivori's current workspace policy.
+**Caveats**: The exact topology identifier is OS-specific (for example Linux sysfs/udev path, Windows device-instance/location/container properties, macOS IORegistry location data) and must be validated. If several indistinguishable Espressif ROM devices are present and the updater cannot prove which one is the original Kivori, abort rather than flash a guessed target. Re-enumeration waiting must be bounded with clear UI state; a 1–3 second disappearance is normal transport transition, not immediate failure. Dependency integration also needs an MSRV spike.
 
 ## R-55. Firmware update option B: application-level A/B firmware with rollback
 
@@ -639,7 +639,7 @@ Recommendation labels used below:
 
 **Alternatives**: “Best effort on any Linux desktop.” Possible for community builds but too vague for reliable product claims.
 
-**Caveats**: Building AppImage/package artifacts on newer distributions can raise glibc/WebKitGTK compatibility baselines. Build on the oldest intended supported environment and test newer ones separately.
+**Caveats**: Building AppImage/package artifacts on newer distributions can raise glibc/WebKitGTK compatibility baselines. Build on the oldest intended supported environment and test newer ones separately. Packaging must also install/validate any Kivori udev policy required by R-48/R-73.
 
 ## R-63. Testing strategy: pure domain tests + backend contract tests + real platform evidence
 
@@ -653,17 +653,17 @@ Recommendation labels used below:
 
 ## R-64. Add model/property tests for no-stale-replay and gesture ownership
 
-**Decision**: **SUGGESTED** — beyond example unit tests, add state-machine/property tests generating disconnects, focus changes, target loss, direction reversals, wake gestures, and reconnects to prove invariants such as “no command dispatched after gesture cancellation” and “reconnect never replays expired input.”
+**Decision**: **SUGGESTED** — beyond example unit tests, add state-machine/property tests generating disconnects, focus changes, target loss, direction reversals, wake gestures, invalid encoder transitions, and reconnects to prove invariants such as “no command dispatched after gesture cancellation” and “reconnect never replays expired input.”
 
 **Rationale**: These bugs emerge from event ordering rather than one happy path. Pure models are cheap to fuzz/model-test compared with reproducing timing races manually.
 
 **Alternatives**: Only explicit hand-written examples. Keep them for readability, but supplement with generated sequences once the model exists.
 
-**Caveats**: Property tests prove the model implementation, not that native callbacks are delivered exactly as modeled. Backend reconciliation still matters.
+**Caveats**: Property tests prove the model implementation, not that native callbacks or electrical inputs are delivered exactly as modeled. Backend and hardware reconciliation still matter.
 
 ## R-65. Keep permission/restriction truth separate from transport health
 
-**Decision**: **SUGGESTED** — platform adapters should publish permission/restriction capability changes independently from DeviceRegistry connection state. Losing Accessibility/portal permission must not look like USB disconnect; USB reconnect must not claim permission has recovered.
+**Decision**: **SUGGESTED** — platform adapters should publish permission/restriction capability changes independently from DeviceRegistry connection state. Losing Accessibility/portal/serial-device permission must not look like USB disconnect; USB reconnect must not claim permission has recovered.
 
 **Rationale**: This directly maps to the contract's Permission Required and localized uncertainty behavior and prevents a transport FSM from becoming overloaded with host-policy state.
 
@@ -717,17 +717,17 @@ Recommendation labels used below:
 
 | Product capability | Windows | macOS | Linux X11 | Linux Wayland |
 |---|---|---|---|---|
-| USB Kivori session | **CURRENT/SUGGESTED** `serialport` | **SUGGESTED**, normalize tty/cu | **SUGGESTED**, libudev/permissions | **SUGGESTED**, same serial layer |
+| USB Kivori session | **CURRENT/SUGGESTED** `serialport`; exclusive handle | **SUGGESTED**, normalize tty/cu | **SUGGESTED**, udev/uaccess policy may be required | **SUGGESTED**, same serial layer/policy |
 | Foreground app profile | **SUGGESTED** WinEvent | **SUGGESTED** NSWorkspace | **SUGGESTED** EWMH | **PLATFORM-LIMITED** compositor protocol |
 | Window-specific profile | **SUGGESTED** Win32 metadata | **SupportedWithPermission** AX | **SUGGESTED** EWMH/X11 | **PLATFORM-LIMITED** |
-| Workspace transition | **SUGGESTED** public virtual-desktop membership + focus | **SUGGESTED** Spaces notification | **SUGGESTED** EWMH | compositor-dependent |
+| Workspace transition | **SUGGESTED** public virtual-desktop membership + focus | **SUGGESTED** Spaces notification + reconcile | **SUGGESTED** EWMH | compositor-dependent |
 | Generic shortcut | SendInput, usually **Unverified** | permission-dependent synthetic input | XTEST candidate | portal/compositor permission |
 | Master audio | Core Audio endpoint | Core Audio device-dependent | PipeWire/Pulse candidate | PipeWire/Pulse candidate |
 | App audio | strong candidate | **SPIKE / limited** | PipeWire candidate | PipeWire candidate |
 | Mic activity | **SPIKE** capture sessions | **SPIKE** modern process audio APIs | PipeWire candidate | PipeWire candidate |
 | Media control/state | **SPIKE** GSMTC | **SPIKE**, no generic public equivalent assumed | **SUGGESTED** MPRIS | **SUGGESTED** MPRIS |
 | DND/interruption | partial suitability signal | permission-aware Focus candidate | DE-specific | DE-specific |
-| User-session ownership | **SUGGESTED** WTS | **SUGGESTED** NSWorkspace | **SUGGESTED** logind | **SUGGESTED** logind |
+| User-session ownership | WTS pre-switch + **broker candidate for hard guarantee** | NSWorkspace pre-switch + **broker candidate for hard guarantee** | logind/uaccess; broker if required | same |
 | Sleep/display state | Windows power settings | NSWorkspace/power APIs | logind/DE | logind/DE |
 | Overlay classification | rich but heuristic | app/window + permission-dependent detail | possible under X11 | restricted/compositor-dependent |
 
@@ -746,7 +746,7 @@ Recommendation labels used below:
 | `device/fsm.rs` transport connection FSM | Keep narrow as transport/link FSM |
 | `device/session.rs` | Keep; extend capability-gated protocol handling |
 | `device/serial.rs` blocking `serialport` | Keep unless measurements justify replacement |
-| `runtime/device_task.rs` single device | Evolve toward DeviceRegistry + DeviceActor(s) |
+| `runtime/device_task.rs` single device | Evolve toward DeviceRegistry + DeviceActor(s), or broker client if R-74 proves necessary |
 | `first_candidate()` | Replace with normalized multi-device discovery |
 | `orchestrator::Orchestrator { desired }` | Do not grow into product god object; supersede with AppCore + resolver |
 | `kivori-model::ConnectionState` | Keep transport-only |
@@ -775,12 +775,12 @@ Recommendation labels used below:
 | US2 Honest Confirmation | ActionAttempt/ExecutionTracker + platform observability |
 | US3 Atomic Physical Interaction | Firmware GestureStateMachine + ContextEngine cancellation |
 | US4 Observable Desktop State | Platform observers + product state axes + PresentationResolver |
-| US5 App/User-Aware Controls | ContextEngine + SessionOwnershipGate + ConfigStore |
+| US5 App/User-Aware Controls | ContextEngine + SessionOwnershipGate/possible broker + ConfigStore |
 | US6 Restricted/Permission-Limited | Platform capability/permission model + PresentationResolver |
 | US7 Visual Hierarchy | PresentationResolver + canonical renderer |
 | US8 Localized Uncertainty | typed capability/state model, not transport fallback |
 | US9 System/Feedback/Display Idle | platform observers + display-policy state + firmware display control |
-| US10 Connection/Recovery/Continuity | DeviceRegistry/Session + ExecutionTracker + firmware recovery/update |
+| US10 Connection/Recovery/Continuity | DeviceRegistry/Session or broker + ExecutionTracker + firmware recovery/update |
 | US11 Configuration/Assignment/Updates | native ConfigStore + DeviceRegistry assignment + UpdateCoordinator + React UX |
 
 **Rationale**: It ties research directly to the normative User Story document without turning this research into another product contract.
@@ -788,6 +788,66 @@ Recommendation labels used below:
 **Alternatives**: One subsystem per User Story. Rejected because several stories intentionally cross the same platform/execution/presentation components.
 
 **Caveats**: This is ownership guidance, not a prohibition on collaboration between modules.
+
+## R-73. Linux serial permission is provisioning policy, not a runtime privilege bypass
+
+**Decision**: **SUGGESTED / SPIKE REQUIRED** — on systemd/logind desktops, prefer a narrowly matched Kivori udev rule using the `uaccess` seat mechanism so the active local user receives device-node access. Provide distro-specific fallback guidance where that mechanism is unavailable. Never solve normal serial access by running Kivori Desktop as root.
+
+**Rationale**: logind's `uaccess` tag explicitly ties access to the active seat/session, which aligns with Kivori's user-isolation semantics. A user-space process cannot override a kernel device-node denial after the fact. Installer/package setup is the appropriate privileged boundary.
+
+**Alternatives**: Add the user permanently to `dialout`/`plugdev` as a compatibility fallback; ship `MODE="0666"`; use setuid/root helper; switch to HID solely for permissions. Broad world access and routine elevation are rejected. HID is not guaranteed to eliminate Linux access policy and would require different USB capabilities/hardware from current ESP32-C3 USB Serial/JTAG.
+
+**Caveats**: Matching only Espressif VID/PID may be too broad if unrelated boards use the same identity. Validate what interface/path/serial metadata is stable enough for a safe rule and document package uninstall cleanup.
+
+## R-74. Machine-level HardwareBroker is the only researched path to a hard cross-session USB ownership guarantee if inactive user processes may be frozen
+
+**Decision**: **CANDIDATE / SPIKE REQUIRED** — if the shipped product promises that Fast User Switching always hands Kivori to the newly active user even when the old user process is suspended, move physical USB ownership into a minimal machine-level broker whose lifecycle is independent of user GUI-session suspension.
+
+**Rationale**: On Windows, communications resources are opened exclusively and another process cannot open the port until the existing handle closes. A `SessionOwnershipGate` inside a frozen process cannot execute `close()`. ACL or group changes do not forcibly revoke an existing serial handle. The same architectural concern can appear on other OSes where switched-out user apps continue running.
+
+**Alternatives**: Keep per-user direct ownership and document/measure graceful switch support only. This remains valid if the product does not promise a hard takeover guarantee. Killing the previous user's process from the incoming user is rejected as an unsafe ownership protocol.
+
+**Caveats**: A broker adds installation, privilege, IPC, update, and security complexity. It should not own user profile/action semantics unless there is a separate reason. Prototype the failure mode first; do not add a service purely from theoretical concern if supported OS behavior reliably delivers release callbacks before suspension.
+
+## R-75. UpdateCoordinator needs deterministic physical-device correlation across ROM-mode USB re-enumeration
+
+**Decision**: **SUGGESTED for ROM flashing** — model update binding using an `UpdateLease` that records the normal Kivori DeviceId plus OS-level physical USB location/topology evidence before reset. During ROM mode, correlate only to the expected device on that physical path; after application reboot, require the original DeviceId and expected firmware handshake before declaring success.
+
+**Rationale**: Native USB reset can make the serial node disappear and return under another COM/tty name. ROM bootloader mode cannot answer Kivori's application handshake, so the stable product DeviceId cannot be the only intermediate identifier. A fixed port name is therefore insufficient.
+
+**Alternatives**: Let `espflash` enumerate every Espressif device and pick the first responsive one. Rejected in a multi-device product because it can target the wrong unit. Ask the user to unplug all other devices is a safe fallback UX when unique correlation is impossible.
+
+**Caveats**: Define bounded states such as `EnteringBootloader`, `AwaitingRomDevice`, `Flashing`, `AwaitingApplication`, and `Verifying`. Re-enumeration delay is expected progress, not Disconnected failure. OS-specific topology stability must be validated across hubs/docks and cable unplug/replug.
+
+## R-76. macOS native callbacks must never own AppCore work
+
+**Decision**: **SUGGESTED** — on macOS, use AppKit/Tauri main-thread facilities only for observer registration/teardown and minimal notification ingress. A callback should copy stable identifiers/event kind/timestamp, perform a non-blocking bounded send, and return. AppCore work, focus stabilization, database access, serial operations, process queries, rendering, and async waits belong outside that callback.
+
+**Rationale**: Tauri exposes a main-thread execution mechanism and AppKit/NSWorkspace participate in the GUI event environment. Blocking that path can starve window/event processing. The product already accepts 300–500 ms passive stabilization, so there is no need to resolve profiles synchronously in the notification callback.
+
+**Alternatives**: Resolve profile/action state directly on the AppKit thread. Rejected. Poll frontmost app continuously to avoid callbacks is also rejected as the primary strategy.
+
+**Caveats**: Bounded queues require an overflow policy. For foreground/workspace observation, latest-state coalescing plus final readback/reconciliation is preferable to blocking the main thread. Tests should simulate delayed/out-of-order ingress and prove stale candidates do not commit.
+
+## R-77. Dropped encoder motion is information loss; acceleration can degrade but cannot infer it
+
+**Decision**: **SUGGESTED** — define three input outcomes below gesture semantics: `ValidatedDetent(CW/CCW)`, `InvalidTransition`, and optional `InputQualityDegraded`/overflow diagnostics. Only validated detents affect value/direction. Missing physical motion that produced no validated event is not reconstructable.
+
+**Rationale**: If five physical clockwise detents produce only three observed logical detents, the safe result is three detents and potentially lower estimated acceleration. If an electrically impossible Gray-code sequence occurs, discard/diagnose it rather than converting it to a reverse tick. If a valid CCW detent survives conditioning, it is an intentional semantic reversal from Kivori's observable perspective and resets acceleration.
+
+**Alternatives**: Velocity extrapolation, adding guessed detents, or suppressing one reverse tick during high-speed motion. Rejected because all can produce actions the hardware did not actually observe.
+
+**Caveats**: High invalid-transition rate may justify conservative `1×` acceleration for the rest of that gesture, but this is degradation, not reconstruction. Hardware validation should establish a quality threshold if this behavior is adopted.
+
+## R-78. Input conditioning should be selected from measured signal quality, not peripheral preference
+
+**Decision**: **SPIKE REQUIRED** — treat PCNT, GPIO interrupts/state machine, periodic high-rate sampling, and external RC/Schmitt conditioning as components that may be combined. Select the simplest solution that produces validated logical detents with acceptable loss/false-count behavior on the actual Kivori PCB and encoder population.
+
+**Rationale**: PCNT is useful for hardware counting but its microsecond-scale filter cannot be assumed to clean millisecond mechanical bounce. Software Gray-code validation is robust against many bounce patterns, while external conditioning can reduce CPU/interrupt complexity at BOM/electrical cost. The correct choice is empirical.
+
+**Alternatives**: Freeze PCNT because it is a hardware peripheral, or freeze software decoding because it is flexible. Both are premature.
+
+**Caveats**: Test multiple encoder samples, temperature/age if practical, slow precision reversal, extreme spin, simultaneous button press, display/USB load, and recovery hold. Record both false detents and dropped detents; optimizing only one metric can hide a poor UX.
 
 ---
 
@@ -803,44 +863,54 @@ The following should be answered with small evidence-producing spikes before the
 6. **Wayland foreground context** — test GNOME/Mutter, KDE/KWin, Sway/wlroots, Hyprland, niri, and other intended environments rather than assuming protocol presence.
 7. **Wayland RemoteDesktop portal UX** — evaluate permission prompts, persistence tokens, reconnect behavior, and whether the session model is acceptable for a physical controller.
 8. **Linux PipeWire mapping** — prove master volume, per-stream/app control, microphone activity, virtual-device behavior, and sandboxed app metadata.
-9. **Fast User Switching** — measure hardware release/reacquisition and private-state invalidation on Windows/macOS/Linux.
-10. **Tauri single-instance semantics across simultaneous local users** — verify one user's instance does not incorrectly prevent another user's per-session instance.
-11. **Stable DeviceId provisioning** — choose prototype and manufacturing paths and test persistence across reflashes/updates.
-12. **Firmware update architecture** — compare ROM flashing versus A/B with actual flash/image/update timing data.
-13. **`espflash` integration/MSRV** — decide whether to pin a compatible library release, raise Kivori MSRV, ship a sidecar, or implement only required flashing primitives.
-14. **Heartbeat production path** — reconcile code/tests/docs before introducing richer Degraded health semantics.
-15. **Config persistence** — compare versioned JSON versus bundled SQLite using actual profile/macro/device-assignment schema complexity.
-16. **macOS serial normalization** — validate `/dev/cu.*` preference/deduplication with real ESP32-C3 enumeration.
-17. **Cross-session Desktop self-update** — verify behavior when multiple users have Kivori processes running.
+9. **Fast User Switching normal path** — measure hardware release/reacquisition and private-state invalidation on Windows/macOS/Linux.
+10. **Frozen-handle Fast User Switching** — deliberately suspend/freeze the outgoing user process while it owns Kivori and determine whether a machine-level HardwareBroker is required for the promised product behavior.
+11. **Tauri single-instance semantics across simultaneous local users** — verify one user's instance does not incorrectly prevent another user's per-session instance.
+12. **Stable DeviceId provisioning** — choose prototype and manufacturing paths and test persistence across reflashes/updates.
+13. **Firmware update architecture** — compare ROM flashing versus A/B with actual flash/image/update timing data.
+14. **ROM-mode device correlation** — validate physical USB topology/location identifiers across Windows/macOS/Linux, hubs/docks, reset, and normal ROM/application re-enumeration.
+15. **`espflash` integration/MSRV** — decide whether to pin a compatible library release, raise Kivori MSRV, ship a sidecar, or implement only required flashing primitives.
+16. **Heartbeat production path** — reconcile code/tests/docs before introducing richer Degraded health semantics.
+17. **Config persistence** — compare versioned JSON versus bundled SQLite using actual profile/macro/device-assignment schema complexity.
+18. **macOS serial normalization** — validate `/dev/cu.*` preference/deduplication with real ESP32-C3 enumeration.
+19. **macOS callback ingress** — prove NSWorkspace/Spaces/session callbacks remain responsive under AppCore load and that delayed/coalesced events reconcile to current truth.
+20. **Linux Kivori udev policy** — prove a narrowly matched `uaccess` rule on intended distributions and define safe fallback when logind/udev policy differs.
+21. **Cross-session Desktop self-update** — verify behavior when multiple users have Kivori processes running.
+22. **Broker feasibility** — if needed, prototype the smallest cross-platform or per-OS broker boundary before moving product logic into a service.
 
 ## Hardware-validation-required (do NOT trust research alone)
 
 1. **HW-040 quadrature/bounce characterization** — measure transition order, bounce duration, detents per logical step, and fastest realistic manual rotation.
-2. **PCNT vs GPIO-interrupt decoder** — compare lost/false detents and CPU/load behavior on actual ESP32-C3 hardware.
-3. **Recovery hold under input noise** — verify rotary bounce/auxiliary inputs cannot cancel/reset recovery timing.
-4. **Actual flash capacity and layout** — record physical flash chip size, bootloader/partition footprint, firmware image size, asset size, and free margin.
-5. **A/B feasibility** — if pursued, verify two image slots + metadata fit with safe margin and test rollback after intentionally bad firmware.
-6. **Power-loss firmware update** — remove power at multiple flash/metadata phases and prove documented recovery outcome.
-7. **ROM recovery** — deliberately install an unusable app image and recover using physical BOOT/EN path.
-8. **GPIO2/GPIO8/GPIO9/EN straps** — validate reset-time electrical levels with display/backlight attached and document resistor/load requirements.
-9. **USB Serial/JTAG recovery behavior** — verify automatic downloader entry where expected and manual recovery when the application cannot cooperate.
-10. **Multi-device USB** — connect several physical Kivori units, confirm stable identity, assignment, Passive presentation, unplug/replug, and port renumbering.
-11. **Sustained USB and render latency** — preserve the existing physical validation requirements for link stalls/reconnect and display performance.
-12. **Buzzer/display power behavior** — validate wake latency, blanking/backlight behavior, and no-ambiguous-silence presentation on physical panel.
+2. **PCNT-only rejection/validation** — measure whether the actual board signal is already clean enough for PCNT's limited glitch filter; do not assume it is.
+3. **Decoder comparison** — compare PCNT + electrical conditioning, GPIO interrupt/state machine, and any hybrid/sampling candidate for lost/false detents and CPU/load behavior.
+4. **Encoder quality telemetry** — determine useful invalid-transition/overflow thresholds and whether conservative 1× degradation improves UX.
+5. **Recovery hold under input noise** — verify rotary bounce/auxiliary inputs cannot cancel/reset recovery timing.
+6. **Actual flash capacity and layout** — record physical flash chip size, bootloader/partition footprint, firmware image size, asset size, and free margin.
+7. **A/B feasibility** — if pursued, verify two image slots + metadata fit with safe margin and test rollback after intentionally bad firmware.
+8. **Power-loss firmware update** — remove power at multiple flash/metadata phases and prove documented recovery outcome.
+9. **ROM recovery** — deliberately install an unusable app image and recover using physical BOOT/EN path.
+10. **GPIO2/GPIO8/GPIO9/EN straps** — validate reset-time electrical levels with display/backlight attached and document resistor/load requirements.
+11. **USB Serial/JTAG re-enumeration** — measure port disappearance/reappearance timing and topology identity through bootloader entry, flashing, reset, hubs, and multiple connected Kivori units.
+12. **Multi-device USB** — connect several physical Kivori units, confirm stable identity, assignment, Passive presentation, unplug/replug, and port renumbering.
+13. **Sustained USB and render latency** — preserve the existing physical validation requirements for link stalls/reconnect and display performance.
+14. **Buzzer/display power behavior** — validate wake latency, blanking/backlight behavior, and no-ambiguous-silence presentation on physical panel.
 
 ## Platform-validation-required
 
 1. **Windows 10/11 intended baseline** — foreground hooks, WTS lock/switch, power notifications, Core Audio endpoint changes, UIPI restriction behavior, fullscreen/game overlays.
-2. **Windows Fast User Switching** — two users with Kivori Desktop installed/running; verify only active session owns USB and no prior-user presentation leaks.
-3. **Windows elevated/protected contexts** — UAC/secure desktop and elevated target behavior without running Kivori as admin.
-4. **macOS Intel + Apple Silicon** — app focus, Spaces, Accessibility grant/revoke, session switching, sleep/wake, Core Audio devices, signing/notarized build.
-5. **macOS multiple audio devices** — built-in, USB, Bluetooth, HDMI, aggregate/virtual where applicable.
-6. **Linux X11** — at least one mainstream EWMH desktop/WM, PipeWire/Pulse setup, XTEST, session switching, serial permissions.
-7. **GNOME Wayland** — foreground capability reality, portal remote input, PipeWire, logind, permissions.
-8. **KDE Wayland** — same categories; do not assume GNOME portal/compositor behavior.
-9. **wlroots-family Wayland** — validate foreign-toplevel protocol availability and portal/backend differences on intended environments.
-10. **Linux packaging** — clean-machine installs for each claimed package format/distro baseline, including `libudev`, WebKitGTK, serial group/udev rules, PipeWire/portal dependencies.
-11. **Offline operation on every supported OS** — block network completely and confirm control, profiles, rendering, device connection, and cached config work; update check failure must remain non-blocking.
+2. **Windows Fast User Switching graceful handoff** — two users with Kivori Desktop installed/running; verify outgoing session releases before suspension when normal notifications arrive.
+3. **Windows frozen-owner case** — freeze/suspend an old user's Kivori process while its serial handle is open and confirm incoming-user behavior; use this evidence to decide R-74.
+4. **Windows elevated/protected contexts** — UAC/secure desktop and elevated target behavior without running Kivori as admin.
+5. **macOS Intel + Apple Silicon** — app focus, Spaces, Accessibility grant/revoke, session switching, sleep/wake, Core Audio devices, signing/notarized build.
+6. **macOS callback starvation/reconciliation** — deliberately load AppCore/background work and prove AppKit remains responsive while context settles to current foreground truth.
+7. **macOS multiple audio devices** — built-in, USB, Bluetooth, HDMI, aggregate/virtual where applicable.
+8. **Linux X11** — at least one mainstream EWMH desktop/WM, PipeWire/Pulse setup, XTEST, session switching, serial permissions.
+9. **Linux udev/uaccess install** — clean-machine package install/uninstall, active-seat handoff, no-root normal runtime, and safe matching of Kivori versus unrelated Espressif boards.
+10. **GNOME Wayland** — foreground capability reality, portal remote input, PipeWire, logind, permissions.
+11. **KDE Wayland** — same categories; do not assume GNOME portal/compositor behavior.
+12. **wlroots-family Wayland** — validate foreign-toplevel protocol availability and portal/backend differences on intended environments.
+13. **Linux packaging** — clean-machine installs for each claimed package format/distro baseline, including `libudev`, WebKitGTK, serial/udev policy, PipeWire/portal dependencies.
+14. **Offline operation on every supported OS** — block network completely and confirm control, profiles, rendering, device connection, and cached config work; update check failure must remain non-blocking.
 
 ## Sources
 
@@ -862,6 +932,7 @@ Primary/vendor/standards references used for this research (verify exact API/ver
 - Tauri Updater plugin (signed updates): <https://v2.tauri.app/plugin/updater/>
 - Tauri Autostart plugin: <https://v2.tauri.app/plugin/autostart/>
 - Tauri async runtime: <https://docs.rs/tauri/latest/tauri/async_runtime/>
+- Tauri `run_on_main_thread`: <https://docs.rs/tauri/latest/tauri/struct.App.html>
 - Tauri distribution/signing guidance: <https://v2.tauri.app/distribute/>
 - Tauri GitHub Action: <https://github.com/tauri-apps/tauri-action>
 - Tauri Linux AppImage guidance: <https://v2.tauri.app/distribute/appimage/>
@@ -871,6 +942,7 @@ Primary/vendor/standards references used for this research (verify exact API/ver
 - `SetWinEventHook`: <https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwineventhook>
 - Fast User Switching programming guidance: <https://learn.microsoft.com/en-us/windows/win32/shell/fastuserswitching>
 - `WTSRegisterSessionNotification`: <https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/nf-wtsapi32-wtsregistersessionnotification>
+- Communications Resource Handles (exclusive serial access): <https://learn.microsoft.com/en-us/windows/win32/devio/communications-resource-handles>
 - `IVirtualDesktopManager::IsWindowOnCurrentVirtualDesktop`: <https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ivirtualdesktopmanager-iswindowoncurrentvirtualdesktop>
 - `OpenInputDesktop`: <https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-openinputdesktop>
 - Power setting GUIDs / session display status: <https://learn.microsoft.com/en-us/windows/win32/power/power-setting-guids>
@@ -879,7 +951,7 @@ Primary/vendor/standards references used for this research (verify exact API/ver
 - `IAudioSessionControl2::GetProcessId`: <https://learn.microsoft.com/en-us/windows/win32/api/audiopolicy/nf-audiopolicy-iaudiosessioncontrol2-getprocessid>
 - Audio sessions: <https://learn.microsoft.com/en-us/windows/win32/coreaudio/audio-sessions>
 - `SendInput` / UIPI limitation: <https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput>
-- GSMTC Session Manager: <https://learn.microsoft.com/en-us/uwp/api/windows.media.control.globalsystemmediatransportcontrolssessionmanager>
+- GSMTC Session Manager: <https://learn.microsoft.com/en-us/uwp/api/windows.media.control/globalsystemmediatransportcontrolssessionmanager>
 - `SHQueryUserNotificationState`: <https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shqueryusernotificationstate>
 - Extended window styles: <https://learn.microsoft.com/en-us/windows/win32/winmsg/extended-window-styles>
 - DWM window attributes (`DWMWA_CLOAKED`): <https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute>
@@ -902,6 +974,8 @@ Primary/vendor/standards references used for this research (verify exact API/ver
 
 ### Linux / freedesktop / Wayland
 
+- systemd/logind `sd-login` udev tags including `uaccess`: <https://man7.org/linux/man-pages/man3/sd-login.3.html>
+- systemd `70-uaccess.rules`: <https://cgit.freedesktop.org/systemd/systemd/tree/src/login/70-uaccess.rules>
 - EWMH / Window Manager Specification (`_NET_ACTIVE_WINDOW`, `_NET_CURRENT_DESKTOP`): <https://specifications.freedesktop.org/wm/latest-single/>
 - XTEST fake input: <https://www.x.org/releases/X11R7.5/doc/man/man3/XTestFakeKeyEvent.3.html>
 - Wayland `ext-foreign-toplevel-list-v1`: <https://wayland.app/protocols/ext-foreign-toplevel-list-v1>
@@ -914,9 +988,11 @@ Primary/vendor/standards references used for this research (verify exact API/ver
 
 ### Espressif / embedded Rust
 
-- `esp-hal` PCNT module / quadrature example: <https://docs.rs/esp-hal/latest/esp_hal/pcnt/>
+- `esp-hal` PCNT module / quadrature example and 1023-cycle filter bound: <https://docs.rs/esp-hal/latest/esp_hal/pcnt/>
 - `esp-hal` eFuse module: <https://docs.rs/esp-hal/latest/esp_hal/efuse/>
 - ESP32-C3 boot mode / download selection: <https://docs.espressif.com/projects/esptool/en/latest/esp32c3/advanced-topics/boot-mode-selection.html>
+- esptool advanced reset modes / USB-Serial/JTAG re-enumeration: <https://docs.espressif.com/projects/esptool/en/latest/esp32c3/esptool/advanced-options.html>
+- esptool configuration / open-port retry behavior: <https://docs.espressif.com/projects/esptool/en/latest/esp32c3/esptool/configuration-file.html>
 - ESP32-C3 USB Serial/JTAG console/download behavior: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32c3/api-guides/usb-serial-jtag-console.html>
 - ESP-IDF OTA update/rollback model: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/ota.html>
 - `esp-bootloader-esp-idf` OTA module: <https://docs.espressif.com/projects/rust/esp-bootloader-esp-idf/latest/esp32c3/esp_bootloader_esp_idf/ota/index.html>
