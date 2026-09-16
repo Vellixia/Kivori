@@ -1,206 +1,130 @@
 # Research: Device Connection Foundation
 
-**Feature**: `001-device-connection-foundation` | **Date**: 2026-07-17
+**Feature:** `001-device-connection-foundation`  
+**Original research date:** 2026-07-17  
+**Reconciled:** 2026-09-16
 
-**Purpose**: Resolve uncertain dependencies and ESP32-C3 target limitations behind the
-[plan](./plan.md). Findings verified against current library releases (July 2026). Each item is stated
-as **Decision · Rationale · Alternatives · Caveats**. A hardware-validation list at the end enumerates
-facts that cannot be trusted without a physical device.
+**Purpose:** Preserve the technical research that informed Feature 001 while clearly separating original recommendations from what the repository ultimately implemented. Each item uses **Decision · Rationale · Alternatives · Caveats**. Current implementation truth is described in [`architecture.md`](./architecture.md), while unresolved physical evidence is tracked in [`validation-checklist.md`](./validation-checklist.md).
+
+Research is evidence, not permanent architecture law. Where implementation diverged from an early recommendation, the implemented result and current tests take precedence for Feature 001.
 
 ---
 
 ## R-1. Device transport: ESP32-C3 native USB Serial/JTAG
 
-**Decision**: Use the ESP32-C3's built-in **USB Serial/JTAG** controller as the host↔device transport —
-no external USB-UART bridge. In firmware, `esp_hal::usb_serial_jtag::UsbSerialJtag` (async via
-`.into_async()`, implements `embedded-io`/`embedded-io-async`). Filter host-side by VID:PID
-**`0x303A:0x1001`**.
+**Decision:** Use the ESP32-C3 built-in USB Serial/JTAG controller as the host/device transport, without an external USB-UART bridge. Filter the initial physical profile by Espressif USB VID:PID `0x303A:0x1001` and verify the Kivori handshake before treating a candidate as a Kivori device.
 
-**Rationale**: One USB cable carries power, flashing, logging, JTAG, and app data. It enumerates as a
-standard CDC-ACM device (Windows: `usbser.sys`, "USB Serial Device (COMx)"), so the desktop serial stack
-treats it as an ordinary COM port. Matches the feature's "USB serial initially" constraint with the
-fewest moving parts.
+**Rationale:** One cable supports power, flashing/debugging, and product serial traffic. It fits the Feature 001 USB-serial requirement with minimal hardware.
 
-**Alternatives**: External CP210x/CH34x UART bridge (more BOM, different VID/PID, but "fully stable"
-esp-hal UART). Kept as a documented fallback; the VID/PID allowlist is configurable to support it.
+**Alternatives:** External CP210x/CH34x-style bridge. This remains possible for future hardware but adds BOM and changes discovery identity.
 
-**Caveats**: Full-Speed USB (12 Mbps theoretical); **ignores baud-rate settings** (runs at USB speed);
-**64-byte** endpoint FIFO per direction; **TX can stall if the host is not draining** the port. The
-esp-hal driver is behind the **`unstable`** feature (see R-2). → Feeds risks **R2**; small semantic
-frames (not pixels) keep us far from the bandwidth ceiling.
+**Caveats:** USB Serial/JTAG has a small FIFO and transmit can stall when the host is not draining. Sustained-throughput and disconnect/stall recovery remain physical validation items.
 
-## R-2. Firmware HAL: esp-hal 1.0 (no_std)
+## R-2. Firmware HAL: esp-hal, bare-metal `no_std`
 
-**Decision**: Target **esp-hal 1.0** (`no_std`, bare-metal). Use blocking or async peripheral modes;
-adopt **`esp-hal-embassy`** only if the firmware goes fully async. **Pin the exact esp-hal version.**
+**Decision:** Use `esp-hal` for the ESP32-C3 firmware and keep the firmware/runtime `no_std`. Pin embedded dependencies deliberately rather than treating HAL upgrades as routine dependency bumps.
 
-**Rationale**: esp-hal reached **1.0.0 stable (30 Oct 2025)** and is Espressif's vendor-backed Rust SDK.
-GPIO/UART/SPI/I2C, `esp_hal::init`, and `time` are stabilized with blocking + async modes — enough for a
-display + serial companion.
+**Rationale:** The product needs GPIO/SPI/USB/time primitives without a full OS/runtime. The separate firmware workspace keeps embedded feature selection isolated from host crates.
 
-**Alternatives**: `esp-idf-hal` (`std`, wraps the C ESP-IDF; threads, mature Wi-Fi/BT). Rejected: pulls
-`std` and a heavier runtime; unnecessary without radios and contrary to the `no_std`/hardware-conscious
-constitution.
+**Alternatives:** `esp-idf-hal`/ESP-IDF. Rejected for Feature 001 because its heavier runtime was unnecessary for the connection/display foundation.
 
-**Caveats**: The 1.0 stability promise is **narrow** — `usb_serial_jtag` (and RMT/I2S/etc.) sit behind
-the **`unstable`** feature and may churn across minor bumps. → Risk **R11**: pin the version, isolate USB
-access in `transport.rs`, upgrade deliberately.
+**Caveats:** USB Serial/JTAG APIs have historically carried weaker stability guarantees than core HAL APIs. Physical behavior must be revalidated when the embedded stack materially changes.
 
-## R-3. Display driver: mipidsi (240×240 SPI, windowed writes)
+## R-3. Display driver: MIPI-DCS/ST7789 with windowed writes
 
-**Decision**: Use **`mipidsi` (pin ~0.10.x)** for the 240×240 SPI panel (GC9A01 round or ST7789). Drive
-dirty-region updates with `Display::set_pixels(sx, sy, ex, ey, colors)` and `embedded-graphics`
-`DrawTarget` (`fill_contiguous`).
+**Decision:** Use `mipidsi` and windowed/partial writes rather than requiring a full framebuffer. The physical panel is now verified as **ST7789, 240x240 RGB565**.
 
-**Rationale**: `mipidsi` is the unified MIPI-DCS driver supporting both candidate controllers and
-**exposes arbitrary address-window / sub-rectangle writes** — exactly what tile/scanline/dirty-region
-rendering needs. **No full framebuffer required**; partial regions stream straight over SPI.
+**Rationale:** Partial updates fit the shared tile renderer and reduce memory pressure while keeping the renderer controller-agnostic.
 
-**Alternatives**: Single-model crates (`gc9a01-rs`, `st7789`). Rejected: `mipidsi` is the recommended
-unified path and keeps the panel choice configurable via `DeviceProfile`.
+**Alternatives:** Controller-specific display crates or a permanent full framebuffer.
 
-**Caveats**: Notable API churn (0.9→0.10 `interface`/`SpiInterface` refactor) — **pin the version**. The
-exact 240×240 controller (round GC9A01 vs square ST7789) is a `DeviceProfile` parameter; the renderer is
-resolution-driven and controller-agnostic.
+**Caveats:** The original research treated GC9A01 vs ST7789 as unknown. Physical validation on 2026-08-11 resolved the production profile to ST7789 with offset `(0,0)`, 90° rotation, RGB order, inversion enabled, SPI2 at 20 MHz Mode 3, SCK GPIO6, MOSI GPIO7, D/C GPIO2, reset GPIO3, and backlight GPIO8 active-high.
 
-## R-4. ESP32-C3 memory & framebuffer strategy
+## R-4. ESP32-C3 memory and framebuffer strategy
 
-**Decision**: **Tile/scanline rendering with dirty regions; no full framebuffer** (also mandated by the
-spec/constitution). Budget a few KB per tile band.
+**Decision:** Use tile/band rendering and dirty-region/change detection rather than making a full 240x240 RGB565 framebuffer mandatory.
 
-**Rationale**: The C3 has **400 KB SRAM (~384 KB usable after cache)** with no fixed DRAM/IRAM split. A
-full 240×240×2 = **112.5 KB** RGB565 buffer is feasible (~29% of SRAM) and — since this feature runs **no
-Wi-Fi/BLE** — would actually fit comfortably. But double-buffering (~225 KB) is unrealistic, and tiling
-coexists with future radio use, pairs naturally with `mipidsi::set_pixels`, and honors Principle IV.
+**Rationale:** A full frame is 115,200 bytes. Tiling keeps memory predictable, works naturally with partial display writes, and leaves headroom for future firmware behavior.
 
-**Alternatives**: Single full framebuffer (simpler render loop, more RAM, more SPI per frame if not
-diffed). Rejected by constraint "no requirement for a full 240×240 framebuffer" and Principle IV;
-revisit only for a radio-light, animation-heavy future.
+**Alternatives:** A single full framebuffer can be reconsidered if later firmware measurements show it materially simplifies animation without compromising memory headroom.
 
-**Caveats**: Whether 112.5 KB fits *a given* build depends on code/stack/heap — irrelevant here since we
-tile, but relevant if the decision is ever revisited.
+**Caveats:** Actual RAM headroom is a property of the linked firmware build, not a datasheet estimate.
 
-## R-5. Desktop serial: tokio-serial with a spawn_blocking fallback
+## R-5. Desktop serial: implementation settled on blocking `serialport` ownership in a dedicated device thread
 
-**Decision**: Primary = **`tokio-serial` (5.4.x)** async on Tauri's Tokio runtime. Enumerate with
-`available_ports()` → `SerialPortType::UsbPort(UsbPortInfo { vid, pid, serial_number, .. })` and filter
-by `0x303A:0x1001`. Wrap serial behind a small internal transport trait so a **blocking `serialport`
-(4.x) in `tokio::task::spawn_blocking`** fallback is a local swap.
+**Decision:** **Current implementation:** use the blocking `serialport` crate behind the Desktop's dedicated background device thread/actor rather than the original async-first `tokio-serial` recommendation.
 
-**Rationale**: `tokio-serial` is the async wrapper over `serialport-rs` (via `mio-serial`) and fits an
-async read loop. VID/PID filtering is identical across both crates. Filtering by VID/PID (not COM
-number) satisfies "no fixed COM port" (FR-001).
+**Rationale:** The dedicated thread keeps blocking serial I/O away from the React/webview and Tauri GUI lifecycle while avoiding unnecessary async serial complexity. The resulting implementation has working host tests and Windows startup coverage.
 
-**Alternatives**: Pure blocking `serialport` from the start (simpler, very robust) — kept as the
-fallback rather than the default to preserve an async-first core.
+**Alternatives:** `tokio-serial` remains a viable future option if a demonstrated concurrency/scalability problem justifies it.
 
-**Caveats**: Windows quirks — `COM10+` needs `\\.\COM10` (crate-handled); **no native device-removal
-event** (detect via I/O errors, heartbeat, or `available_ports()` polling); Windows async serial has
-historically rough overlapped-I/O edges → the `spawn_blocking` fallback exists for exactly this. →
-Risks **R2**, informs the disconnect-detection strategy.
+**Caveats:** The original July 2026 research recommended `tokio-serial` with a blocking fallback. Feature 001 is an example of why research is challengeable: implementation evidence supported the simpler blocking path. Device removal is still detected through I/O/session/discovery behavior rather than relying on port names as identity.
 
-## R-6. Protocol payloads: serde + postcard (no_std)
+## R-6. Protocol payloads: serde + postcard in one shared protocol crate
 
-**Decision**: **`postcard` (1.1.x)** + `serde` for payloads in a **single shared `kivori-protocol`
-crate** of message types used by both firmware and desktop. `no_std`, serialize into fixed slices /
-`heapless::Vec` (no `alloc` on device).
+**Decision:** Keep payload types in the shared `kivori-protocol` crate using `serde`/`postcard`, with fixed-size/no-alloc-friendly operation on firmware.
 
-**Rationale**: `postcard` is purpose-built for `no_std` embedded, has a **stable wire format since 1.0**,
-uses compact varint (LEB128) encoding, and needs no allocator. One shared message crate guarantees both
-ends agree on the schema.
+**Rationale:** Both peers compile against the same message definitions, reducing schema drift and supporting `no_std` firmware.
 
-**Alternatives**: `bincode` (not embedded-focused), hand-rolled binary (error-prone), `postcard-rpc`
-(more structure than needed now). Rejected for footprint/complexity; `postcard-rpc`/`postcard-schema`
-noted for possible future use.
+**Alternatives:** Hand-written binary layouts, JSON, protobuf, or a larger RPC framework.
 
-**Caveats**: postcard is **not self-describing and has no field tags** — schema evolution is manual and
-**append-only**: appending new variants at the end of a top-level message `enum` is the tolerable
-evolution path; reordering/removing fields is a breaking change. → Directly shapes **ADR-0002**: explicit
-version header bytes + capability negotiation + append-only evolution within a major version.
+**Caveats:** Postcard enums are not field-tagged/self-describing. Current protocol evolution therefore treats message-enum ordering as wire-significant and uses explicit protocol version/capability negotiation. See [ADR-0002](../../adr/0002-wire-protocol.md).
 
-## R-7. Tauri v2 binary frame transport (Rust → webview)
+## R-7. Tauri v2 binary preview transport
 
-**Decision**: Tauri **v2 (GA)**. Push preview frames as **raw bytes**: single-frame fetches return
-**`tauri::ipc::Response`** wrapping `Vec<u8>` (arrives in JS as an `ArrayBuffer`, `application/octet-
-stream`); continuous **play** streaming uses the **`Channel`** API. Convert RGB565→RGBA8888 for the
-canvas.
+**Decision:** Keep canonical rendering in native/shared Rust and send rendered preview bytes through typed Tauri IPC/channel surfaces; the canvas remains a blit/inspection surface rather than a second renderer.
 
-**Rationale**: v2's custom-protocol IPC carries raw bytes with no JSON/base64 overhead —
-`ipc::Response` for request/response, `Channel` for ordered push (the same API Tauri uses for download/
-stdout streaming). Keeps the canvas a pure blit surface.
+**Rationale:** This preserves visual parity and avoids JSON/base64 overhead for frame data.
 
-**Alternatives**: Event system (payloads are JSON strings — "not suitable for bigger messages") and
-base64 (+33% size + CPU). Both rejected for the ~112 KB (RGB565) / ~225 KB (RGBA) frame path.
+**Alternatives:** Re-render scenes in TypeScript or use JSON/base64 frame payloads.
 
-**Caveats**: The buffer is still **copied across the IPC boundary**, and the webview must **convert
-RGB565→RGBA8888** before blitting — both real per-frame costs. Do the conversion in Rust (constraint 2)
-and **measure achievable FPS**; cap preview FPS if needed. → Risk **R7**.
+**Caveats:** IPC/webview copying and RGB conversion remain measurable costs. Device Studio performance should be tuned from evidence rather than assumed unlimited.
 
-## R-8. Drift-free millisecond timing (design decision, no external dep)
+## R-8. Drift-free integer timing
 
-**Decision**: Canonical timebase = integer `elapsed_ms: u32`. Device Studio keeps an integer step index
-`n`; derive `elapsed_ms = (n * 1000) / 30` (round with `+15`). Never accumulate `+33.333`.
+**Decision:** Canonical rendering time is integer `elapsed_ms`; inspection stepping derives elapsed time from an integer step index rather than repeatedly adding a floating-point frame duration.
 
-**Rationale**: Deriving time from an integer index is a pure function of `n`, eliminating cumulative
-floating-point drift while still giving a 30 Hz inspection cadence and exact 1000 ms periodicity every 30
-steps. Satisfies the explicit "without cumulative floating-point drift" requirement.
+**Rationale:** This keeps rendering deterministic and avoids accumulated floating-point drift.
 
-**Alternatives**: Accumulate a `f64` millisecond counter (drifts); track microseconds with a 33333 µs
-step (drifts ~10 µs/s). Both rejected. → **ADR-0003**, verified by a drift unit test.
+**Alternatives:** Accumulated floating-point/microsecond deltas.
 
-## R-9. Deterministic asset compilation (host)
+**Caveats:** Timing policy is an engineering model, not a requirement that every future animation run at one fixed FPS. See [ADR-0003](../../adr/0003-timing-model.md).
 
-**Decision**: `tools/asset-compiler` rasterizes layered SVGs with **`resvg`/`usvg` + `tiny-skia`** to
-RGB565, packs bitmap fonts, and emits a byte-reproducible compiled blob + manifest. CI recompiles and
-diffs the hash.
+## R-9. Deterministic asset compilation
 
-**Rationale**: `resvg`/`tiny-skia` are pure-Rust and deterministic for identical inputs; pinning
-versions + fixed rounding + stable ordering + no timestamps yields byte-reproducible output — the
-foundation for cross-platform golden frames (Principle III/XI).
+**Decision:** Rasterize source assets at build time into the canonical runtime representation and verify deterministic output through hashes/golden evidence.
 
-**Alternatives**: Runtime SVG parsing (violates Principle XI), or a C rasterizer (harder to pin
-deterministically). Rejected. → **ADR-0004**.
+**Rationale:** Firmware should not parse/render SVG at runtime, and host/device should consume the same compiled visual data.
 
-**Caveats**: Any rasterizer upgrade can change output bytes; treat asset-toolchain bumps as deliberate,
-golden-refreshing changes.
+**Alternatives:** Runtime SVG parsing or independent host/device asset pipelines.
 
-## R-10. Firmware workspace isolation (design decision)
+**Caveats:** Rasterizer/toolchain upgrades may intentionally change bytes and therefore require explicit golden review. See [ADR-0004](../../adr/0004-asset-format.md).
 
-**Decision**: Firmware in a **separate Cargo workspace** with path deps into `crates/*` (see plan
-[Workspace boundaries](./plan.md#workspace-boundaries)).
+## R-10. Firmware workspace isolation
 
-**Rationale**: Prevents Cargo feature unification from leaking `std`/`alloc` features into shared crates
-and breaking the firmware `no_std` build; lets the embedded target own its `.cargo/config.toml`, target
-triple, panic strategy, and runner. → **ADR-0001**, enforced by a CI job that builds shared crates for
-`riscv32imc-unknown-none-elf`.
+**Decision:** Keep `firmware/esp32-c3` in a separate Cargo workspace while sharing path dependencies into the `crates/` foundation.
 
-**Alternatives**: Single root workspace (simpler, one lockfile) — rejected for the feature-unification
-hazard. Per-crate independent packages without a workspace (loses shared lockfile/tooling) — unnecessary.
+**Rationale:** This prevents host/std feature unification from silently changing firmware builds and lets the embedded target own its toolchain/runner configuration.
+
+**Alternatives:** One root workspace for all targets.
+
+**Caveats:** Two workspaces add some command/dependency-management overhead. The isolation is intentional and enforced through compile/dependency checks. See [ADR-0001](../../adr/0001-two-workspace-cargo-split.md).
 
 ---
 
-## Hardware-validation-required (do NOT trust without a physical ESP32-C3)
+## Hardware-validation-required
 
-These cannot be settled by research and are folded into the [hardware procedure](./quickstart.md) and
-risks R1–R3/R11:
+The following claims cannot be established by code review, host simulation, or Wokwi alone and remain in [`validation-checklist.md`](./validation-checklist.md):
 
-1. **USB Serial/JTAG sustained throughput** — 12 Mbps is theoretical; real figure with the 64-byte FIFO
-   and esp-hal flush behavior is unknown. (Ample for our small frames, but measure.)
-2. **USB TX write-blocking / robustness** — the "TX stalls when no host reads" behavior and
-   disconnect/reconnect recovery must be exercised on-device.
-3. **Achievable display FPS over SPI** — full-frame vs tile updates at the chosen SPI clock; datasheet
-   numbers don't predict real refresh rate. (Drives whether SC-004 latency holds.)
-4. **`tokio-serial` async reliability on Windows** with the C3's native CDC port specifically, and
-   device-removal detection latency.
-5. **End-to-end preview latency/FPS** through Tauri IPC + webview RGB565→RGBA blit (measure the whole
-   pipe, not just the Rust side).
-6. **112.5 KB framebuffer fit** — only relevant if the tile decision is ever revisited; confirm against a
-   real linked build.
-7. **esp-hal `usb_serial_jtag` API stability** — behind `unstable`; expect possible breakage on upgrade.
+1. sustained native USB Serial/JTAG throughput and transmit-stall recovery;
+2. physical disconnect/reconnect behavior and rapid-cycle stability;
+3. sustainable physical ST7789 frame/update rate;
+4. controlled plug-in, state-change, and reconnect latency measurements;
+5. physical Device Studio/renderer parity checks;
+6. pinned `esp-hal` USB Serial/JTAG behavior on the actual ESP32-C3 hardware.
+
+The physical panel identity, pin map, geometry, orientation, color order, and inversion settings are no longer research unknowns; they were verified on 2026-08-11 and are recorded in [`validation-checklist.md`](./validation-checklist.md).
 
 ## Sources
 
-esp-hal 1.0 announcement (Espressif); `esp_hal::usb_serial_jtag` docs; ESP-IDF USB Serial/JTAG console
-guide; ESP32-C3 memory-types guide; `mipidsi` (docs.rs / GitHub almindor/mipidsi); `serialport-rs` +
-`tokio-serial` `UsbPortInfo` docs; `postcard` (GitHub jamesmunns/postcard); Tauri 2.0 stable blog + Tauri
-IPC documentation.
+The original research used Espressif/esp-hal documentation, ESP-IDF USB Serial/JTAG and memory guidance, `mipidsi`, `serialport`/`tokio-serial`, `postcard`, and Tauri v2 IPC documentation. Current repository behavior and physical evidence are the authority for the implemented Feature 001 baseline where they differ from the original recommendation.
