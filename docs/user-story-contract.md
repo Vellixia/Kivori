@@ -74,6 +74,10 @@ The following rules apply across all user stories.
 46. **Input conditioning precedes gesture semantics.** Raw encoder electrical transitions MAY be filtered/decoded before they become logical detents; only validated logical detents participate in direction-reversal and acceleration rules.
 47. **Software test wake preserves idle history.** Waking from Display Sleep for Test Action or Preview Buddy State MUST NOT by itself restart the full ambient-idle progression.
 48. **Overlay classification is conservative and non-invasive.** Kivori SHOULD use OS-observable context and explicit user rules; ambiguous overlay identity MUST fall back to normal focus stabilization rather than hidden/invasive inspection or guessing.
+49. **Composite actions are non-transactional in MVP.** A later macro-step failure MUST NOT silently roll back already completed earlier side effects; current observable desktop state remains authoritative unless compensation was explicitly authored.
+50. **Transient presentation restores current underlying truth.** When a transient ends, Kivori MUST return to the actual current underlying state, including Running/Busy when long-running work remains active, rather than defaulting to Idle.
+51. **Desktop Test Action is deliberate user intent.** A user-triggered Test Action from Kivori Desktop belongs to the deliberate-interaction feedback class, not ordinary unsolicited/background feedback.
+52. **Single-gesture ownership is device-wide in MVP.** While one ordinary physical gesture owns input, other ordinary rotary or button controls, including auxiliary buttons, MUST NOT dispatch a second mapped action unless a future explicit multi-input gesture type defines that combination.
 
 ---
 
@@ -263,6 +267,23 @@ Examples:
 
 The overall composite confirmation MUST NOT be stronger than the least-confirmed required step.
 
+### Composite rollback semantics
+
+Composite actions are **not transactional in MVP**.
+
+If a required later step fails after an earlier step already changed observable desktop state successfully:
+
+- the earlier successful side effect MUST remain part of current desktop truth;
+- Kivori MUST NOT silently issue an inverse action in an attempt to restore the previous state;
+- Kivori SHOULD reconcile and display the actual resulting desktop state alongside the Error / Partial Failure outcome;
+- automatic rollback/compensation MUST NOT be inferred from the macro definition merely because the overall macro failed.
+
+Example:
+
+`Mute System Audio [State Confirmed] -> Launch App [known failure]` -> overall **Error / Partial Failure**, while System Audio remains muted and the mute indicator remains truthful.
+
+A compensating step such as `On Failure -> Unmute System Audio` MAY be supported in the future or represented as explicitly authored macro behavior, but it is not an implicit MVP rollback mechanism.
+
 ### Initial interactive timing targets
 
 - **< 50 ms:** local input acknowledgement;
@@ -335,6 +356,14 @@ Initial display targets:
 
 A transient reaction MUST return to the actual underlying state rather than blindly returning to Idle.
 
+If a host-side long-running job is still active when an unrelated interaction transient expires, the primary buddy MUST return to the current **Running / Busy** representation (or the truthful equivalent for that job) rather than Idle.
+
+Example:
+
+`Build Running -> Volume 45% transient -> transient expires -> Build Running`
+
+Transient presentation MUST NOT erase, complete, or otherwise mutate the underlying persistent execution state.
+
 ### Deliberate interaction collision
 
 A new valid deliberate interaction MAY immediately replace a transient reaction from an earlier deliberate interaction.
@@ -370,6 +399,9 @@ Default transient priority is:
 - [ ] Any required Unverified step caps the overall composite at Triggered / Unverified.
 - [ ] A composite of only unverifiable required triggers remains Triggered / Unverified when no known failure occurs.
 - [ ] Mixed confirmed + unverified required steps remain Triggered / Unverified overall.
+- [ ] A later macro failure does not silently roll back successful earlier state changes.
+- [ ] Partial macro failure reconciles to the actual remaining desktop state.
+- [ ] Automatic compensation occurs only when explicitly authored/supported, not as hidden MVP rollback.
 - [ ] Timeout logic distinguishes known failure from unknown outcome.
 - [ ] A target app crash during a pending action becomes Error when the crash is known.
 - [ ] Missing callback without known failure becomes Unverified.
@@ -380,7 +412,8 @@ Default transient priority is:
 - [ ] Unknown host-job outcome becomes Unverified rather than automatic failure or retry.
 - [ ] Unresolved/long-running work has an intentional active presentation when rendering is available.
 - [ ] Unknown progress is represented indeterminately rather than with invented percentages.
-- [ ] Transient reactions restore the underlying current state.
+- [ ] Transient reactions restore the actual underlying current state.
+- [ ] A Running/Busy job remains Running/Busy after an unrelated transient expires.
 - [ ] A newer deliberate interaction may truncate and replace an older interaction transient immediately.
 - [ ] Deliberate user-action transients do not form a mandatory visual queue.
 - [ ] Ordinary background errors do not interrupt active user-action feedback.
@@ -485,24 +518,31 @@ This exception MUST NOT allow Kivori to preserve a stale preview after the gestu
 
 ### One gesture at a time
 
-For MVP, the first active gesture owns physical interaction until it ends.
+For MVP, gesture ownership is **device-wide across ordinary physical controls**.
+
+The first active ordinary gesture owns physical interaction until it ends.
 
 Examples:
 
-- rotation starts -> button input does not become a second action;
-- button hold starts -> rotary movement does not become another implicit action.
+- rotation starts -> primary or auxiliary button input does not become a second action;
+- primary button hold starts -> rotary movement does not become another implicit action;
+- primary button hold starts -> pressing a secondary/auxiliary button does not dispatch its mapped action;
+- an auxiliary-button gesture starts -> another ordinary button or rotary control does not become a parallel mapped action.
 
-Future combinations such as `Hold + Rotate` MAY be introduced only as explicit input types with explicit configuration.
+Suppressed secondary input MAY receive a subtle local busy/blocked reaction when useful, but Kivori MUST NOT present normal action acknowledgement or success feedback that could imply the suppressed action was dispatched.
+
+Future combinations such as `Hold + Rotate`, `Hold Primary + Press Auxiliary`, or other simultaneous controls MAY be introduced only as explicit input types with explicit configuration.
 
 The hardware recovery hold is an explicit exception to ordinary gesture arbitration. Once recovery ownership begins on the primary button:
 
 - rotary detents MUST NOT cancel or reset the recovery timer;
 - rotary detents MUST NOT execute ordinary mapped rotary actions;
-- rotary detents MUST NOT replace recovery ownership with another gesture;
+- auxiliary/secondary button presses MUST NOT execute ordinary mapped actions;
+- other ordinary controls MUST NOT replace recovery ownership with another gesture;
 - ordinary mapped short/Hold actions for that same button gesture MUST remain cancelled;
 - releasing the primary button before the final recovery threshold ends the recovery attempt normally without executing a mapped action.
 
-This rule makes recovery robust on push-encoders where incidental shaft rotation can occur while the user is holding the encoder down.
+This rule makes recovery robust on push-encoders and future multi-button hardware where incidental or simultaneous control input can occur while the user is holding the recovery-capable control.
 
 ### Interrupted communication
 
@@ -540,6 +580,9 @@ For a currently active continuous gesture, the system MAY retain the latest targ
 - [ ] Crossing the initial ~2 s recovery-ownership threshold cancels the mapped Hold for that gesture.
 - [ ] Releasing after recovery ownership begins but before ~10 s executes no mapped desktop action.
 - [ ] A Display Sleep-originated press never executes ordinary short/Hold actions from that same physical gesture.
+- [ ] Device-wide single-gesture ownership suppresses ordinary secondary/auxiliary controls while another physical gesture is active.
+- [ ] Suppressed secondary input does not produce misleading dispatched/success feedback.
+- [ ] Multi-control combinations require an explicit future input type rather than implicit concurrent execution.
 - [ ] Known target loss mid-gesture cancels the remaining stream.
 - [ ] Remaining detents after target loss are ignored until that gesture ends.
 - [ ] Target loss does not cause per-detent retargeting to another application.
@@ -547,7 +590,7 @@ For a currently active continuous gesture, the system MAY retain the latest targ
 - [ ] External updates do not visually fight the same continuous value during an active gesture.
 - [ ] Important discrete state changes may still surface during a continuous gesture.
 - [ ] Implicit chord actions are not produced in MVP.
-- [ ] Rotary detents during recovery ownership do not cancel/reset recovery and do not execute ordinary actions.
+- [ ] Rotary and auxiliary inputs during recovery ownership do not cancel/reset recovery and do not execute ordinary actions.
 - [ ] Reconnecting/Disconnected cancels an active normal gesture immediately.
 - [ ] Layer 1 connection takeover does not wait for the rotary gesture-end timer.
 - [ ] Inputs during Reconnecting are not replayed after recovery.
@@ -1087,9 +1130,12 @@ Kivori distinguishes two feedback classes:
 Examples:
 
 - button acknowledgement;
-- rotary acknowledgement.
+- rotary acknowledgement;
+- deliberate `Test Action` feedback initiated by the user from Kivori Desktop.
 
 This follows Kivori's own feedback settings and MAY remain enabled during OS Do Not Disturb.
+
+A deliberate `Test Action` is software-originated but user-initiated. It therefore participates in the deliberate-interaction transient priority rather than being treated as an unsolicited background event.
 
 **Background feedback**
 
@@ -1215,6 +1261,7 @@ Urgent wake classification SHOULD be narrow and deterministic. It MUST NOT becom
 - [ ] Global audio follows the current OS logical endpoint.
 - [ ] App-specific audio remains explicitly scoped.
 - [ ] Background buzzer feedback respects DND by default.
+- [ ] Desktop Test Action is classified as deliberate user-initiated feedback rather than ordinary unsolicited background feedback.
 - [ ] Monitor blanking does not become Sleeping or Disconnected by itself.
 - [ ] Dim, Low Motion, and Display Sleep timings are independently configurable within hardware-safe bounds.
 - [ ] Display Sleep can fully blank the panel.
@@ -1380,6 +1427,7 @@ When the continuous hold reaches the recovery-ownership threshold:
 - recovery becomes the exclusive owner of the button gesture;
 - incidental rotary detents MUST NOT cancel, reset, pause, or restart the recovery timer;
 - incidental rotary detents MUST NOT execute ordinary mapped rotary actions;
+- auxiliary/secondary button presses MUST NOT execute ordinary mapped actions;
 - ordinary short/Hold actions for that button gesture MUST remain suppressed;
 - releasing before the final threshold ends the recovery attempt without executing a mapped desktop action.
 
@@ -1439,7 +1487,7 @@ If firmware is so compromised that it cannot observe the recovery gesture, this 
 - [ ] Releasing before recovery ownership may execute an armed Hold action when configured and permitted.
 - [ ] Crossing recovery ownership cancels the pending Hold action for that gesture.
 - [ ] Recovery visual feedback supersedes pending Hold-action presentation once recovery owns the gesture.
-- [ ] Rotary detents during recovery ownership do not cancel/reset recovery or execute normal rotary mappings.
+- [ ] Rotary/auxiliary inputs during recovery ownership do not cancel/reset recovery or execute normal mappings.
 - [ ] Recovery hold provides visible in-progress feedback when rendering is available.
 - [ ] A 9-second hold released after recovery ownership does not execute mapped short/Hold actions.
 - [ ] Display Sleep-originated recovery presses never execute mapped short/Hold actions from that gesture.
@@ -1499,6 +1547,15 @@ When the selected Kivori is in Display Sleep:
 - these commands MUST NOT bypass Protected state, missing permissions, unavailable connection, assignment restrictions, or other higher-priority takeover rules;
 - Preview Buddy State MUST NOT execute an ordinary mapped desktop action merely because it woke the display;
 - the temporary software wake SHOULD preserve the device's pre-existing idle age and return directly to Display Sleep after feedback plus the configured/product grace unless deliberate physical interaction or a higher-priority state occurs.
+
+### Desktop test feedback priority
+
+A user-triggered `Test Action` is deliberate user intent for feedback-priority purposes.
+
+- its acknowledgement/result MAY immediately replace an older ordinary deliberate-interaction transient;
+- it MUST NOT be classified as an unsolicited/background transient merely because it originates in software rather than a physical control;
+- urgent/privacy/safety state and Layer 1 takeover/recovery presentation continue to outrank it;
+- `Preview Buddy State` is likewise deliberate user intent, but it is a preview presentation rather than proof that a desktop action succeeded.
 
 The configuration UI SHOULD make a blocked test distinguishable from a test that was actually dispatched.
 
@@ -1562,6 +1619,8 @@ Future multi-device roles MAY be introduced only through explicit assignment sem
 - [ ] Normal-to-Dim, Dim-to-Low-Motion, and Low-Motion-to-Display-Sleep timings are independently configurable within safe limits.
 - [ ] Preview Buddy State can explicitly wake a selected sleeping device without executing a mapped action.
 - [ ] Test Action can explicitly wake a selected sleeping device when testing is otherwise permitted.
+- [ ] Test Action feedback is treated as deliberate user interaction rather than unsolicited background feedback.
+- [ ] A newer Test Action may replace an older ordinary deliberate-interaction transient while remaining below urgent/takeover/recovery presentation.
 - [ ] Test/preview software wake preserves idle history and returns to Display Sleep unless new deliberate activity occurs.
 - [ ] Test/preview commands do not bypass Protected/permission/connection/assignment restrictions.
 - [ ] Explicit overlay rules can be configured without invasive hooks and cannot bypass Protected classification.
@@ -1631,10 +1690,12 @@ Software-originated Test Action / Preview Buddy State wake uses the initial ~1 s
 ## Transient Reaction Priority
 
 1. Urgent immediate-attention state;
-2. newest active user-interaction feedback;
+2. newest deliberate user-interaction feedback, including user-triggered Kivori Desktop `Test Action` feedback;
 3. ordinary unsolicited/background transient.
 
 A new deliberate interaction replaces older interaction feedback rather than waiting in a visual queue.
+
+A user-triggered Desktop `Test Action` participates in this deliberate-interaction tier even though the command originates in software. `Preview Buddy State` is deliberate presentation intent at the same interaction level, but MUST NOT be interpreted as action-success confirmation.
 
 Reconnection does not replay expired historical action transients.
 
@@ -1656,7 +1717,7 @@ When rendering is available, the product SHOULD preserve this presentation inten
 
 1. safety/privacy/urgent state;
 2. Layer 1 takeover/recovery state;
-3. active user interaction or running action feedback;
+3. active deliberate user interaction or running action feedback, including Desktop Test Action feedback;
 4. system-health indication;
 5. primary buddy state;
 6. secondary indicators.
@@ -1675,6 +1736,8 @@ The following are explicitly outside this contract's MVP guarantees:
 - workflow orchestration as the flagship use case;
 - automatic inference of ambiguous sub-app identity;
 - implicit simultaneous-input chords;
+- simultaneous independent ordinary actions from multiple physical controls while another gesture owns input;
+- automatic transactional rollback of successfully completed earlier macro steps after a later step fails;
 - acceleration above 5x the configured action base step;
 - reconstructing rotary detents the hardware did not observe;
 - treating raw invalid electrical bounce as a semantic rotary reversal;
