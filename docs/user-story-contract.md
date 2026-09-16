@@ -33,15 +33,21 @@ The following rules apply across all user stories.
 5. **No stale replay.** Expired input MUST NOT execute after a connection or service recovers.
 6. **Explicit action scope.** An action's meaning MUST NOT silently change because a different app profile is active.
 7. **Stable context.** Profile changes MUST follow stable OS focus, not mouse hover or momentary focus theft.
-8. **Gesture ownership.** A physical gesture remains bound to the context in which it began.
-9. **One gesture owns input in MVP.** Simultaneous inputs MUST NOT implicitly become combo triggers.
-10. **User isolation.** One OS user's mappings MUST NOT remain active in another user's session.
-11. **No hidden fallback.** If an action cannot run in the current context, Kivori MUST communicate unavailability rather than silently switch mechanisms.
-12. **Localized uncertainty.** Unknown/restricted state SHOULD propagate only as far as necessary.
-13. **Known host/session state wins.** Explicit sleep, lock, switching-user, update, or restart state outranks generic communication symptoms.
-14. **Passive is not Waiting.** Passive means a usable desktop exists but this device is not assigned as the controller.
-15. **Passive is not Monitor Mode.** Passive devices MUST NOT mirror ordinary real-time desktop state in MVP.
-16. **Hardware recovery is independent.** Basic MCU recovery MUST NOT require healthy desktop software.
+8. **Interaction commits intent.** If a pending foreground application is valid but still inside the focus-stabilization window, deliberate Kivori interaction MUST commit that foreground application before dispatching the action.
+9. **Gesture ownership.** A physical gesture remains bound to the context in which it began.
+10. **One gesture owns input in MVP.** Simultaneous inputs MUST NOT implicitly become combo triggers.
+11. **Wake gestures are atomic.** A gesture that begins while the display is fully asleep MUST be consumed as wake-only in its entirety.
+12. **User isolation.** One OS user's mappings MUST NOT remain active in another user's session.
+13. **No hidden fallback.** If an action cannot run in the current context, Kivori MUST communicate unavailability rather than silently switch mechanisms.
+14. **Localized uncertainty.** Unknown/restricted state SHOULD propagate only as far as necessary.
+15. **Known host/session state wins.** Explicit sleep, lock, switching-user, update, or restart state outranks generic communication symptoms.
+16. **Passive is not Waiting.** Passive means a usable desktop exists but this device is not assigned as the controller.
+17. **Passive is not Monitor Mode.** Passive devices MUST NOT mirror ordinary real-time desktop state in MVP.
+18. **Hardware recovery is out-of-band.** Basic MCU recovery MUST remain available independently of desktop software, profile assignment, and normal action restrictions whenever firmware can still observe the recovery gesture.
+19. **Interaction feedback has priority over ordinary background transients.** Ordinary unsolicited reactions SHOULD NOT interrupt active user-action feedback.
+20. **Urgent state may wake the display.** A small defined class of immediate-attention desktop states MAY wake Display Sleep; ordinary background changes MUST NOT.
+21. **System/privacy indicators outrank custom indicators.** User customization MUST NOT allow app-specific indicators to displace higher-priority safety/privacy state.
+22. **Continuous gestures reconcile at gesture boundaries.** External continuous-value updates SHOULD NOT visually fight an active Kivori rotary gesture; final confirmed state MUST reconcile when the gesture ends.
 
 ---
 
@@ -100,7 +106,7 @@ Example:
 
 - [ ] Assigned actions expose explicit action identity/scope.
 - [ ] App profiles select actions without mutating action meaning.
-- [ ] Rotary actions can define action-specific sensitivity.
+- [ ] Rotary actions can define action-specific sensitivity and acceleration.
 - [ ] Bounded controls clamp correctly.
 - [ ] Boundary feedback is not repeated for every excess tick.
 - [ ] Reverse movement exits boundary suppression immediately.
@@ -169,6 +175,20 @@ A new valid interaction MAY immediately replace a transient reaction with feedba
 
 Takeover states MUST NOT be dismissed merely because another physical input occurred.
 
+### Transient collision priority
+
+When an ordinary unsolicited background transient occurs while user-action feedback is active:
+
+- the active interaction feedback SHOULD finish first;
+- the ordinary background transient MAY be queued and shown afterward if still relevant;
+- ordinary background feedback MUST NOT silently overwrite active user-action feedback.
+
+A defined urgent state MAY preempt user-action feedback when immediate attention is more important than preserving the transient.
+
+Default transient priority is:
+
+**Urgent state -> active interaction feedback -> ordinary unsolicited transient**
+
 ## Acceptance Criteria
 
 - [ ] Local acknowledgement is distinguishable from action success.
@@ -177,6 +197,8 @@ Takeover states MUST NOT be dismissed merely because another physical input occu
 - [ ] A target app crash during a pending action becomes Error when the crash is known.
 - [ ] Missing callback without known failure becomes Unverified.
 - [ ] Transient reactions restore the underlying current state.
+- [ ] Ordinary background errors do not interrupt active user-action success feedback.
+- [ ] Urgent states can preempt transients when defined as immediate-attention conditions.
 
 ---
 
@@ -209,6 +231,16 @@ Confirmed state MUST win.
 A gesture MUST remain attached to the profile/context that was active when the gesture began.
 
 If application focus changes during a rotary burst, the current rotary burst MUST continue using its starting context. The newly focused profile becomes eligible for the next gesture.
+
+### Mid-gesture desktop state changes
+
+For a continuous value that is actively controlled by a Kivori rotary gesture, an external desktop update to that same continuous value SHOULD NOT immediately overwrite the local in-progress preview.
+
+The active gesture temporarily owns the continuous preview until the gesture ends, after which Kivori MUST reconcile to the latest confirmed desktop value.
+
+Important discrete state changes MAY still appear immediately without destroying the continuous preview. For example, an independently observed mute/unmute transition may appear as a status indicator while a volume gesture remains in progress.
+
+This exception MUST NOT allow Kivori to preserve a stale preview after the gesture completes.
 
 ### One gesture at a time
 
@@ -243,6 +275,8 @@ For a currently active continuous gesture, the system MAY retain the latest targ
 - [ ] Rapid rotary use does not require one full confirmation round trip per tick.
 - [ ] Final display reconciles against confirmed state.
 - [ ] Focus change mid-gesture does not split one gesture across profiles.
+- [ ] External updates do not visually fight the same continuous value during an active gesture.
+- [ ] Important discrete state changes may still surface during a continuous gesture.
 - [ ] Implicit chord actions are not produced in MVP.
 - [ ] Inputs during Reconnecting are not replayed after recovery.
 - [ ] Expired inputs during Degraded communication do not execute later.
@@ -272,10 +306,12 @@ If a physical device changes behavior without exposing a trustworthy state signa
 
 Example: if a headset's hardware mute switch electrically blocks a microphone but the OS continues reporting the microphone as active, Kivori MUST NOT invent a muted state unless a trustworthy hardware/device signal becomes available.
 
+The gesture-local preview rule in US3 is temporary presentation ownership only. It MUST NOT weaken the requirement that the final represented state converges to observable desktop truth.
+
 ## Acceptance Criteria
 
 - [ ] External desktop changes can update Kivori state without requiring a Kivori-originated command.
-- [ ] Confirmed desktop state overrides local previews and requested values.
+- [ ] Confirmed desktop state overrides local previews and requested values after gesture reconciliation.
 - [ ] Unobservable hardware-only states are not fabricated.
 - [ ] Stale state is not presented as current after the source becomes invalid.
 
@@ -291,19 +327,33 @@ Example: if a headset's hardware mute switch electrically blocks a microphone bu
 
 ### Focus definition
 
-The active application profile MUST follow stable OS keyboard/window focus.
+The active application profile MUST follow OS keyboard/window focus.
 
 Mouse hover alone MUST NOT change profiles.
 
-Initial stable-focus target: **300-500 ms** before committing to a new profile.
+Initial passive focus-stabilization target: **300-500 ms** before committing to a new profile.
 
 Momentary overlays and brief focus theft SHOULD NOT produce visible profile thrashing.
 
 Transient system overlays MAY be classified as non-profile-owning contexts.
 
+### Interaction commits pending focus
+
+Focus stabilization protects against passive focus flicker; it MUST NOT cause deliberate Kivori input to execute against a stale foreground application.
+
+If Application B currently owns valid OS foreground focus but remains inside the passive stabilization window, a deliberate Kivori interaction MUST:
+
+1. commit Application B as the interaction context immediately;
+2. select Application B's profile if one exists, otherwise the appropriate fallback profile;
+3. bind the complete gesture to that committed context.
+
+The action MUST NOT execute under previously committed Application A solely because the stabilization timer has not expired.
+
+General MUST NOT be used merely as an intermediate race-condition profile when a valid pending foreground app is known.
+
 ### Foreground/background rule
 
-The stable foreground application owns app-specific physical mappings.
+The committed foreground application owns app-specific physical mappings.
 
 Background applications MAY contribute observable status but MUST NOT steal physical mapping ownership merely because they remain active in the background.
 
@@ -343,8 +393,10 @@ MVP operation is scoped to the user's normal interactive session rather than req
 ## Acceptance Criteria
 
 - [ ] Mouse hover does not switch profiles.
-- [ ] Stable OS focus drives app-profile ownership.
+- [ ] Passive focus changes require stable OS focus before visible profile commitment.
 - [ ] Very brief focus theft does not produce a committed profile swap.
+- [ ] Deliberate interaction during the stabilization window commits the valid pending foreground app before execution.
+- [ ] The previous app profile is not used for a new gesture merely because the stabilization timer is still running.
 - [ ] Background apps do not take physical control ownership.
 - [ ] Generic-host sub-app behavior is explicit rather than guessed.
 - [ ] User A mappings cannot remain active after User B becomes the active user.
@@ -373,7 +425,8 @@ During protected contexts for MVP:
 - custom macros MUST NOT execute;
 - local physical acknowledgement MAY still occur;
 - unavailable actions MUST be communicated clearly;
-- Kivori MUST NOT silently change execution mechanism.
+- Kivori MUST NOT silently change execution mechanism;
+- the hardware recovery gesture defined in US10 MUST remain available whenever firmware can still observe it.
 
 ### Permission restrictions
 
@@ -395,6 +448,7 @@ Permission failure MUST remain conceptually distinct from connection failure.
 - [ ] Protected contexts suspend unsafe/custom mappings.
 - [ ] Blocked actions do not silently fall back to another mechanism.
 - [ ] Repeated blocked actions are not spam-retried without state change.
+- [ ] Protected context does not disable the hardware MCU recovery gesture.
 
 ---
 
@@ -442,7 +496,8 @@ In MVP, Passive devices:
 
 - MUST NOT execute normal mappings;
 - MUST NOT mirror ordinary real-time desktop indicators;
-- SHOULD show a calm connected-but-unassigned presentation.
+- SHOULD show a calm connected-but-unassigned presentation;
+- MUST still permit the hardware recovery gesture when firmware can observe it.
 
 Passive MUST NOT be overloaded into visual Monitor Mode.
 
@@ -487,12 +542,24 @@ Only one primary buddy state should dominate at a time.
 Secondary indicators may include:
 
 - microphone muted;
+- call active;
 - master audio muted;
 - media active;
-- call active;
 - supported app-specific persistent state.
 
-The UI SHOULD prioritize a small number of high-value indicators and condense/hide lower-priority information rather than shrink all content indefinitely.
+The default priority baseline is:
+
+1. **Microphone state**;
+2. **Call Active**;
+3. **Master Audio Mute**;
+4. **Media Playing/Active**;
+5. **Custom app-specific indicators**.
+
+This baseline is intentionally not fully user-configurable. System/privacy indicators MUST NOT be displaced by lower-priority custom app indicators.
+
+Users MAY configure ordering/visibility within the custom app-specific tier, and future product settings MAY expose limited adjustments that preserve the protected system/privacy priority guarantees.
+
+When the visible indicator budget is exceeded, lower-priority indicators SHOULD be condensed or hidden rather than shrinking all content indefinitely.
 
 Active profile information SHOULD normally appear transiently after a profile change rather than occupy a permanent indicator slot.
 
@@ -501,9 +568,11 @@ Active profile information SHOULD normally appear transiently after a profile ch
 - [ ] Takeover states cannot be confused with normal buddy state.
 - [ ] Degraded health has distinct visual allocation from secondary indicators.
 - [ ] Passive displays do not mirror ordinary desktop status in MVP.
+- [ ] Passive assignment does not disable MCU recovery.
 - [ ] Fast User Switching does not unnecessarily flash through Waiting.
 - [ ] Firmware update does not look like an unexplained disconnect.
-- [ ] Secondary-state overload is handled through priority/condensation rather than unlimited shrinking.
+- [ ] Mic and other protected system/privacy indicators cannot be displaced by custom app indicators.
+- [ ] Secondary-state overload is handled through fixed baseline priority plus condensation/hiding.
 
 ---
 
@@ -604,9 +673,28 @@ When Kivori is fully in Display Sleep:
 - passive vibration/motion/USB activity MUST NOT wake it by default;
 - future motion/proximity sensors MAY become explicit configurable wake sources.
 
-The first deliberate interaction while fully blanked MUST wake the display only and MUST NOT execute the assigned desktop action.
+A physical gesture that **begins** while fully in Display Sleep MUST be consumed as wake-only for the entire gesture.
+
+Examples:
+
+- a button press that wakes the screen MUST NOT also execute its assigned desktop action;
+- a five-detent rotary burst that begins while asleep MUST wake the screen but MUST NOT execute ticks 2-5 as an action;
+- after the wake gesture ends, the next new gesture MAY execute normally.
 
 When Kivori is merely Dim or Low Motion, the interaction SHOULD execute normally while restoring full presentation.
+
+### Urgent desktop wake events
+
+A small explicit class of immediate-attention desktop states MAY wake Display Sleep without physical interaction.
+
+Examples include:
+
+- an incoming call that requires timely user awareness;
+- a microphone state transition to active when that transition is considered privacy/safety relevant.
+
+Ordinary background changes MUST NOT wake the fully sleeping display merely because state changed. Examples include routine app-focus changes, media progress, ordinary volume changes, and non-urgent status refreshes.
+
+Urgent wake classification SHOULD be narrow and deterministic. It MUST NOT become a generic notification-wakes-display mechanism.
 
 ## Acceptance Criteria
 
@@ -615,8 +703,11 @@ When Kivori is merely Dim or Low Motion, the interaction SHOULD execute normally
 - [ ] Background buzzer feedback respects DND by default.
 - [ ] Monitor blanking does not become Sleeping or Disconnected by itself.
 - [ ] Display Sleep can fully blank the panel.
-- [ ] First deliberate input from Display Sleep wakes only.
+- [ ] A wake gesture that starts while asleep is swallowed in its entirety.
+- [ ] A multi-tick rotary wake gesture does not partially execute desktop actions.
 - [ ] Passive incidental events do not wake Display Sleep by default.
+- [ ] Narrowly defined urgent desktop states may wake the display.
+- [ ] Ordinary background state changes do not wake Display Sleep.
 
 ---
 
@@ -650,6 +741,8 @@ Waiting MUST NOT silently become a driverless macro mode.
 A usable desktop session exists but this Kivori is not currently assigned as the active controller.
 
 Passive MUST remain distinct from Waiting.
+
+Normal mappings are disabled in Passive, but the hardware recovery gesture MUST remain available whenever firmware can observe it.
 
 ### Host Starting / Resuming
 
@@ -704,9 +797,14 @@ Recovery MUST:
 - work without Kivori Desktop;
 - not depend on healthy USB communication;
 - not erase normal configuration;
-- remain available when the host PC is frozen or unavailable, provided firmware can still observe the recovery gesture.
+- remain available when the host PC is frozen or unavailable, provided firmware can still observe the recovery gesture;
+- remain available while the device is Passive / Unassigned;
+- remain available during Protected/restricted desktop contexts;
+- bypass normal profile/action suppression because it is an out-of-band device recovery path.
 
 Factory reset MUST use a separate, harder-to-trigger mechanism.
+
+If firmware is so compromised that it cannot observe the recovery gesture, this contract does not claim a software-detectable hold can recover that condition; hardware-level boot/recovery mechanisms may be specified separately.
 
 ## Acceptance Criteria
 
@@ -715,6 +813,8 @@ Factory reset MUST use a separate, harder-to-trigger mechanism.
 - [ ] Startup/wake receives a grace state.
 - [ ] Explicit sleep/lock state outranks heartbeat-loss symptoms.
 - [ ] Recovery gesture works without desktop communication.
+- [ ] Recovery remains available in Passive state.
+- [ ] Recovery remains available during Protected/restricted desktop contexts.
 - [ ] Recovery does not erase configuration.
 - [ ] Factory reset is not accidentally triggered by the ordinary recovery gesture.
 
@@ -746,6 +846,7 @@ Kivori Desktop SHOULD provide configuration for:
 - Do Not Disturb behavior;
 - ambient/display-sleep timing;
 - configurable display-wake sources where supported;
+- custom indicator visibility/order within the allowed custom tier;
 - buddy-state preview;
 - action testing;
 - firmware updates;
@@ -787,7 +888,8 @@ When Device B becomes Active:
 - Device A MUST NOT become Waiting solely because assignment changed;
 - Device A MUST NOT silently mirror Device B;
 - Device A MUST NOT execute ordinary mappings;
-- Device A MUST NOT behave as Monitor Mode.
+- Device A MUST NOT behave as Monitor Mode;
+- Device A MUST retain the hardware recovery gesture.
 
 Future multi-device roles MAY be introduced only through explicit assignment semantics.
 
@@ -797,6 +899,8 @@ Future multi-device roles MAY be introduced only through explicit assignment sem
 - [ ] Activating a second device demotes the previous Active device to Passive.
 - [ ] Passive devices do not execute ordinary mappings.
 - [ ] Passive devices do not mirror ordinary desktop state.
+- [ ] Passive devices retain hardware recovery.
+- [ ] System/privacy indicator priority cannot be overridden by custom app indicator ordering.
 - [ ] Profiles are scoped per machine and OS user in MVP.
 - [ ] Desktop background behavior continues without the configuration window being visible.
 
@@ -808,14 +912,14 @@ Future multi-device roles MAY be introduced only through explicit assignment sem
 | --- | --- | --- |
 | Connected | Healthy usable desktop session; device assigned | Yes |
 | Waiting | Powered, but no usable Kivori Desktop session | No |
-| Passive / Unassigned | Desktop session exists; this device is not the active controller | No |
+| Passive / Unassigned | Desktop session exists; this device is not the active controller | No ordinary mappings; recovery remains available |
 | Host Starting / Resuming | Host session is expected to become available | No |
 | Switching User | Known OS user-session transition | No |
 | Reconnecting | Intentional temporary service interruption | No deferred execution |
 | Degraded | Communication unhealthy but partially alive | Limited/current actions only; no stale replay |
 | Disconnected | Established connection unexpectedly lost | No |
 | Sleeping / Locked | Host explicitly inactive/restricted | No normal custom actions |
-| Protected | Secure/protected system context | No normal custom actions |
+| Protected | Secure/protected system context | No normal custom actions; recovery remains available |
 | Permission Required | Broad capability restriction requiring user intervention | Only unaffected capabilities |
 | Firmware Updating | Intentional device firmware update | No normal controls |
 
@@ -829,14 +933,34 @@ Future multi-device roles MAY be introduced only through explicit assignment sem
 | Success transient | ~800 ms |
 | Triggered/Unverified transient | ~1,200 ms |
 | Error/Failed transient | ~2,000 ms |
-| Stable focus before profile commit | 300-500 ms |
+| Passive stable-focus commit | 300-500 ms |
 | Rotary acceleration reset | 250 ms |
 | Host startup/resume grace | 15-30 s |
 | Hardware recovery hold | ~10 s |
 
 These values are validation targets, not protocol constants. Tuning them MUST preserve the semantics defined by the relevant user story.
 
-# 6. MVP Boundaries
+A deliberate Kivori interaction is not required to wait out the passive 300-500 ms focus-stabilization target when a valid pending foreground application is known; that interaction commits the pending context immediately.
+
+# 6. Default Priority References
+
+## Transient Reaction Priority
+
+1. Urgent immediate-attention state;
+2. active user-interaction feedback;
+3. ordinary unsolicited/background transient.
+
+## Secondary Indicator Priority
+
+1. Microphone state;
+2. Call Active;
+3. Master Audio Mute;
+4. Media Playing/Active;
+5. custom app-specific indicators.
+
+Custom indicator settings MAY reorder or hide indicators within the custom tier but MUST NOT displace protected system/privacy indicators.
+
+# 7. MVP Boundaries
 
 The following are explicitly outside this contract's MVP guarantees:
 
@@ -851,9 +975,10 @@ The following are explicitly outside this contract's MVP guarantees:
 - Passive devices acting as Monitor Mode;
 - driverless macro/media fallback without Kivori Desktop;
 - host wake-from-Kivori;
-- visibility into physical device states that are not exposed through a trustworthy signal.
+- visibility into physical device states that are not exposed through a trustworthy signal;
+- fully user-defined priority that can demote system/privacy indicators below custom app indicators.
 
-# 7. Change Control
+# 8. Change Control
 
 Any implementation or future feature that intentionally violates a MUST-level rule in this contract should update this contract and the root PRD in the same product decision/PR, including the reason for the behavior change.
 
