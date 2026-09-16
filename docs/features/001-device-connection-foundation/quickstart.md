@@ -1,150 +1,189 @@
 # Quickstart: Device Connection Foundation
 
-**Feature**: `001-device-connection-foundation` | **Date**: 2026-07-17
+**Feature:** `001-device-connection-foundation`  
+**Status:** implemented foundation; manual acceptance still has open items  
+**Last reconciled:** 2026-09-16
 
-How to set up the monorepo, run the pieces, and **validate** that the feature works end-to-end. This is
-a run/validation guide — implementation lives in `tasks.md` and the code. See [plan.md](./plan.md),
-[data-model.md](./data-model.md), and [contracts/](./contracts/) for design detail.
+This is the current setup and validation guide for the implemented Device Connection Foundation. Feature requirements live in [`requirements.md`](./requirements.md), technical shape in [`architecture.md`](./architecture.md) and [`data-model.md`](./data-model.md), wire/IPC contracts in [`contracts/`](./contracts/), and remaining physical acceptance work in [`validation-checklist.md`](./validation-checklist.md).
+
+The retired Spec Kit plan/task files are intentionally not part of the working documentation tree. Git history remains available if historical task-level investigation is required.
 
 ## Prerequisites
 
-- **Rust** (host toolchain per `rust-toolchain.toml`) + the embedded target
-  `rustup target add riscv32imc-unknown-none-elf`.
-- **Node** + **pnpm** (frontend workspace).
-- **Tauri v2** system prerequisites for Windows (WebView2, MSVC build tools).
-- **espflash** (`cargo install espflash`) for firmware flashing.
-- **just** (`cargo install just`) for command recipes.
-- Everything runs **offline** after dependencies are fetched (FR-029).
+- Rust toolchain from `rust-toolchain.toml`.
+- RISC-V target: `rustup target add riscv32imc-unknown-none-elf`.
+- Bun for the desktop frontend workspace.
+- Tauri v2 system prerequisites for the host OS.
+- `espflash` for physical ESP32-C3 flashing.
+- `just` for repository command recipes.
 
-## Repository layout
+Core operation is offline-first after dependencies are installed. See [`offline-boundary.md`](./offline-boundary.md).
 
-See [plan.md → Project Structure](./plan.md#project-structure). Key: a **host root Cargo workspace**, a
-**separate firmware Cargo workspace** (`firmware/esp32-c3/`), and a **pnpm workspace** for the frontend.
+## Repository shape
+
+The host crates/Desktop app are in the root Cargo workspace. `firmware/esp32-c3/` is a deliberately separate Cargo workspace so firmware features cannot be accidentally unified with host-only/std dependencies. Shared model/protocol/renderer/assets crates are consumed by both sides.
+
+See [`architecture.md`](./architecture.md) and [ADR-0001](../../adr/0001-two-workspace-cargo-split.md).
 
 ## Setup
 
 ```bash
-pnpm install                                   # frontend + shared UI
-cargo fetch                                    # host workspace deps
-just assets                                    # compile source SVGs → runtime blob + verify hash
-(cd firmware/esp32-c3 && cargo fetch)          # firmware workspace deps
+bun install
+cargo fetch
+(cd firmware/esp32-c3 && cargo fetch)
 ```
 
-## Development commands (justfile)
+## Common commands
 
-| Command | Does |
-|---------|------|
-| `just dev` | `tauri dev` with Device Studio enabled (dev build) |
-| `just test` | all host Rust tests + frontend Vitest/axe |
-| `just lint` | `clippy -D warnings` + `rustfmt --check` + ESLint + Prettier + `tsc --noEmit` |
-| `just assets` | compile assets + assert blob hash matches committed manifest |
-| `just fw-build` | build firmware (embedded workspace, compile-only) |
-| `just fw-flash` | flash firmware to a connected ESP32-C3 via espflash |
-| `just golden` | run golden-frame / frame-hash determinism suite |
-| `just golden-bless` | regenerate golden frames (deliberate visual change only) |
-
-## Automated validation (no hardware required)
-
-Run `just test` + `just golden`. These prove the host-verifiable slice:
-
-| Scenario | Command | Expected | Guards |
-|----------|---------|----------|--------|
-| Renderer determinism | `just golden` | Every state at sampled `elapsed_ms` matches the committed RGB565 hash; identical on Windows & Linux | FR-019/033, SC-005/009 |
-| Timing drift-free | `cargo test -p kivori-renderer timing` | `elapsed_ms=(n*1000+15)/30` matches expected over long `n`; periodic every 30 | FR-019, SC-011 |
-| Protocol round-trip | `cargo test -p kivori-protocol codec` | Every `Message` encodes/decodes identically | FR-034 |
-| Malformed frames / fuzz | `cargo test -p kivori-protocol malformed` | Arbitrary/truncated/bad-CRC/bad-COBS input never panics; decoder resyncs | FR-034, SC-008 |
-| Version matrix | `cargo test -p kivori-protocol version` | major mismatch → incompatible; minor → `min`; caps → intersection | FR-003 |
-| Connection FSM | `cargo test -p kivori-desktop fsm` | Injected events drive correct transitions, backoff, and desired-state resync | FR-005/007/008/009/010 |
-| Host-side firmware logic | `cargo test -p kivori-firmware --features host-sim` | Handshake/state/tile-render over an in-memory pipe; stitched tiles == golden full-frame | FR-035, SC-005 |
-| IPC + redaction | `cargo test -p kivori-desktop ipc` | Command shapes correct; no log/DTO carries sensitive data; dev-only commands absent from release | FR-031/032, SC-010, FR-028 |
-| Frontend + a11y | `pnpm --filter desktop test` | Controls behave; keyboard-operable, focus visible, labels present (axe); canvas blits given bytes verbatim | a11y reqs, constraint 2 |
-| `no_std` firmware build | `just fw-build` | Shared crates compile for `riscv32imc-unknown-none-elf` with no alloc | Principle IV |
-| Asset determinism | `just assets` | Recompiled blob hash == committed manifest | Principle XI/III |
-
-## Device Studio validation (no hardware)
-
-1. `just dev` → open the Device Studio route (dev build only).
-2. Select each state (`booting, idle, happy, busy, sleeping, offline`) → preview shows that scene (FR-023).
-3. Set the elapsed-time field to a fixed value → the exact frame renders; re-entering the value renders
-   the identical frame (SC-011).
-4. Play, then pause → animation halts; step → timeline advances exactly one 33.333 ms step (FR-025/026).
-5. Confirm the preview updates come only from `render_preview_frame`/the preview channel (the canvas
-   never draws content itself — constraint 2).
-
-## Physical ESP32-C3 validation procedure (manual)
-
-Hardware automation is unavailable, so this checklist covers true integration (Principle X, FR-035).
-Record measured latencies and the [hardware-validation numbers](./research.md#hardware-validation-required-do-not-trust-without-a-physical-esp32-c3).
-
-**Step 0 — pre-flash gate (do this first)**
-
-Run `just sim-test`. All eight Wokwi scenarios must pass, including `production-runtime`, which executes the
-*same* run loop the physical firmware calls. This catches protocol, lifecycle, renderer, and tile-output
-regressions before a board is involved. It proves **nothing** about the panel — see
-[sim/wokwi/README.md](../../sim/wokwi/README.md) "What this gate does not prove".
-
-**Step 0b — capture the three unknown panel facts (BLOCKS steps 7-8 and 12-13)**
-
-The display half of this procedure cannot run until these are measured and recorded in
-[validation-checklist.md](../../docs/validation-checklist.md) items 23-25:
-
-| Fact | Why it blocks | Where it goes |
-|---|---|---|
-| Panel controller (GC9A01 vs ST7789) | `mipidsi` needs the model; init sequences differ | `DeviceProfile::KIVORI_240.controller` |
-| SPI/CS/D-C/RST + backlight pin map | `bsp::display_bus` takes pin handles, never defaults | a new profile in `firmware/esp32-c3/src/profile.rs` |
-| Visible-area offsets | `PanelGeometry` has no `Default` on purpose | the same profile |
-
-Nothing in the tree guesses these. `firmware/esp32-c3/src/profile.rs` holds **only** a simulation-only Wokwi
-profile; add a sibling module behind its own feature once the facts are known.
-
-**Setup**
-1. `just fw-build`, then `just fw-flash` to flash the device; leave it powered via USB.
-
-   **Until step 0b is done, the `embedded` build brings up the clock and USB Serial/JTAG and then
-   deliberately stops before the render loop — it will NOT draw scenes.** That is intentional: entering the
-   loop requires a controller, pin map, and offsets nobody has measured. Steps 2, 7, 8, and the display half
-   of 12-13 therefore only become runnable once a real profile exists.
-2. Once a profile exists: on power-on, confirm the device shows the **device-originated `booting`** scene,
-   then **`offline`** before any desktop drives it (FR-014).
-3. `just dev` (or run a release build) to launch the desktop.
-
-**US1 — discovery & connection (P1)**
-4. Confirm the app auto-discovers the device with **no port selection** and shows `connecting` →
-   `connected`; connected info shows protocol/firmware version. Measure time from plug-in → connected
-   (**target < 5 s**, SC-001).
-5. Attach an unrelated USB-serial device → confirm it is **not** reported as connected (FR-004).
-6. Flash/attach a deliberately **wrong-major** firmware build → confirm `incompatible` with a clear
-   reason, surfaced **< 5 s** (SC-003), and no state commands are sent.
-
-**US2 — companion states on the device (P2)**
-7. Set each of `idle/happy/busy/sleeping` from the app → the device shows the matching scene with its
-   canonical animation; each change appears **< 1 s** (SC-004).
-8. For a fixed state + elapsed time, compare the device against the Device Studio preview → **identical
-   image** (SC-005 spot-check).
-9. Confirm only semantic state is sent (no pixel/coordinate traffic) — verify via safe diagnostics
-   message types, not payload bytes (FR-015).
-
-**US3 — recovery & restoration (P3)**
-10. With the device showing `busy`, **unplug** it → app shows `disconnected`.
-11. **Replug** → app auto-reconnects and the device returns to `busy` with no user action; measure
-    reconnect+restore (**target < 10 s**, SC-002).
-12. Rapidly unplug/replug several times → the app settles into a stable connected state without thrash
-    (FR-010).
-13. Close the desktop window to background → the connection is maintained (SC-007); the device keeps its
-    last desired state until the session actually ends, then falls back to `offline`.
-14. Fully **restart** the desktop app → desired state resets to `idle` (no cross-restart persistence,
-    clarified).
-
-**Safety/robustness**
-15. While connected, confirm no sensitive data appears in the diagnostics view or log file (SC-010).
-
-## Troubleshooting
-
-- **Device resets on connect**: DTR/RTS control-line handling — see
-  [plan → Windows serial behavior](./plan.md#windows-serial-device-behavior-implemented) (R3).
-- **`COM10+` not found**: handled by the serial crate's `\\.\COM10` form; if manual, use that prefix.
-- **Flaky async serial on Windows**: switch the transport to the blocking `serialport` +
-  `spawn_blocking` fallback (R2 / [research §R-5](./research.md#r-5-desktop-serial-tokio-serial-with-a-spawn_blocking-fallback)).
-- **Golden-frame mismatch after an asset change**: if intentional, `just golden-bless` and review the
-  diff; if not, an asset-toolchain or renderer nondeterminism regressed (R5/R6).
+```bash
+just lint
+just test
+just build
+just fw-check
+just fw-test
+just fw-build
+just fw-flash
+just sim-test
+just golden
+just check-boundaries
 ```
+
+Important commands:
+
+| Command | Purpose |
+|---|---|
+| `just dev` | Run the Tauri Desktop in development mode with Device Studio available. |
+| `just lint` | Rust formatting/clippy plus frontend lint/type/format checks. |
+| `just test` | Host Rust workspace and frontend tests. |
+| `just build` | Host/frontend production builds. |
+| `just fw-check` | Compile shared `no_std` code for the RISC-V target. |
+| `just fw-test` | Run host-sim firmware tests. |
+| `just fw-build` | Build the physical ESP32-C3 firmware. |
+| `just fw-flash` | Flash/monitor the verified physical firmware profile. |
+| `just sim-test` | Run Wokwi integration scenarios. |
+| `just golden` | Run deterministic renderer/golden-frame tests. |
+| `just check-boundaries` | Enforce shared-crate dependency boundaries. |
+
+## Automated validation
+
+The repository's CI covers the software-verifiable part of Feature 001:
+
+- protocol framing, malformed-input handling, version/capability negotiation, and sequence behavior;
+- deterministic shared rendering and golden frames;
+- host-simulation firmware behavior and production-runtime compile checks;
+- desktop connection state/reconnect/session behavior;
+- diagnostics redaction and release-surface guards;
+- frontend type/lint/test/build checks;
+- Wokwi protocol/display/production-runtime scenarios;
+- a real Windows Tauri startup smoke.
+
+Passing simulation or host tests does **not** establish physical panel timing, USB reliability under stress, real reconnect latency, or physical preview/display parity.
+
+## Device Studio validation
+
+1. Run `just dev`.
+2. Open Device Studio.
+3. Select each Feature 001 companion state: `booting`, `idle`, `happy`, `busy`, `sleeping`, `offline`.
+4. Confirm the preview is produced by the shared/native renderer rather than reimplemented by the canvas.
+5. Exercise deterministic elapsed-time inspection and confirm identical inputs reproduce identical frames.
+
+## Wokwi validation
+
+Run:
+
+```bash
+just sim-test
+```
+
+The Wokwi production-runtime scenario executes the same high-level firmware runtime used by the physical firmware through simulated adapters. It is useful for protocol/lifecycle/render integration but is **not** physical hardware evidence.
+
+See [`../../../sim/wokwi/README.md`](../../../sim/wokwi/README.md).
+
+## Verified physical hardware profile
+
+Physical validation on 2026-08-11 established:
+
+| Property | Value |
+|---|---|
+| MCU | ESP32-C3 |
+| USB | Native USB Serial/JTAG |
+| USB VID:PID | `0x303A:0x1001` |
+| Display | ST7789, 240x240 RGB565 |
+| SPI | SPI2, 20 MHz, Mode 3 |
+| SCK | GPIO6 |
+| MOSI | GPIO7 |
+| CS | unused |
+| D/C | GPIO2 |
+| Reset | GPIO3 |
+| Backlight | GPIO8, active-high |
+| Offset | `(0,0)` |
+| Rotation | 90° |
+| Color order | RGB |
+| Inversion | enabled |
+
+These values supersede older pre-hardware assumptions in historical commits.
+
+## Physical validation procedure
+
+### 1. Build and flash
+
+```bash
+just fw-build
+just fw-flash
+```
+
+Confirm the physical device boots and that USB Serial/JTAG enumerates normally.
+
+### 2. Desktop discovery and handshake
+
+Run the desktop with `just dev` or a production build.
+
+Confirm:
+
+- no manual port selection is required;
+- the Kivori device is selected rather than unrelated serial devices;
+- the versioned handshake succeeds;
+- Desktop reports Connected and shows the reported firmware/protocol version.
+
+The basic discovery/handshake path was physically demonstrated on 2026-08-11. The controlled `< 5 s` latency measurement remains open in [`validation-checklist.md`](./validation-checklist.md).
+
+### 3. Companion-state rendering
+
+Exercise `idle`, `happy`, `busy`, and `sleeping` through the desktop and confirm the matching physical scenes.
+
+`idle` has been physically observed; the remaining state-by-state validation and measured `< 1 s` propagation target remain open.
+
+### 4. Preview parity
+
+For a fixed state and elapsed time, compare Device Studio output with the physical panel. Record the result in [`validation-checklist.md`](./validation-checklist.md). This remains manual evidence; golden frames alone do not prove the panel output.
+
+### 5. Disconnect/reconnect
+
+With a non-default desired state active:
+
+1. unplug the device;
+2. confirm Desktop reports the connection loss;
+3. reconnect it;
+4. confirm automatic handshake/resynchronization restores current desired state without replaying unrelated stale activity;
+5. record reconnect timing.
+
+Rapid unplug/replug stability and controlled reconnect timing are still manual acceptance items.
+
+### 6. Background window lifecycle
+
+On a real desktop:
+
+1. close/hide the Kivori window;
+2. verify the process and device work continue;
+3. reactivate the app and verify the single window returns;
+4. explicitly Quit and verify the device task/process stop.
+
+The Windows startup smoke proves the binary starts and remains alive; it does not prove this full hide/reactivate/Quit lifecycle.
+
+### 7. Safety and diagnostics
+
+Confirm ordinary diagnostics/logs do not expose raw payload bytes, raw device identity, secrets, usernames, or machine paths beyond the documented allowlist. See [`diagnostics-and-logging.md`](./diagnostics-and-logging.md).
+
+## Acceptance record
+
+Do not infer manual success from automated tests. Record measured physical/platform evidence in [`validation-checklist.md`](./validation-checklist.md). The current summary of completed vs outstanding Feature 001 work lives in [`closure-status.md`](./closure-status.md).
