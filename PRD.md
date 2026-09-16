@@ -28,7 +28,8 @@ The product should:
 3. acknowledge physical interaction immediately;
 4. distinguish requested state from confirmed desktop state;
 5. adapt controls to context without surprising the user;
-6. remain understandable during disconnects, permissions problems, sleep, updates, and other edge conditions.
+6. remain understandable during disconnects, permissions problems, sleep, updates, and other edge conditions;
+7. make waiting, processing, recovery, restriction, and failure states visibly intentional rather than appearing frozen or unresponsive.
 
 The buddy represents the desktop. It should not claim a state that Kivori cannot observe or verify.
 
@@ -86,6 +87,16 @@ Hardware recovery should not depend on the desktop software or host computer bei
 ### 5.7 Offline-first core
 
 Core control, state representation, configuration, and device operation should not require cloud connectivity. Cloud profile synchronization is not required for MVP.
+
+### 5.8 No ambiguous silence
+
+Whenever Kivori is powered and capable of rendering, a user-relevant waiting, processing, restricted, transitional, failure, or recovery condition should have an intentional visual representation.
+
+A blank, static, or unchanged presentation must not accidentally look like a frozen device. Motion may communicate that Kivori is alive and working, while the buddy, iconography, text, or state treatment communicates what the device is doing.
+
+If progress cannot be measured truthfully, Kivori should show indeterminate activity rather than inventing a percentage or completion estimate.
+
+Deliberate Display Sleep is the primary normal exception: the panel may be blank because blanking is itself the intended presentation. Low-level states in which the renderer is technically unavailable may also temporarily lack the normal visual surface, but Kivori should use any reliable hardware indication available and Kivori Desktop should communicate the state where possible.
 
 ## 6. Primary Product Capabilities
 
@@ -206,6 +217,10 @@ MVP profiles are local per machine and per OS user. Machine-local paths, scripts
 
 Kivori uses four visual layers.
 
+Every user-relevant state should look intentional. When Kivori can render, transitions such as Waiting, Reconnecting, Processing, Protected, Permission Required, Firmware Updating, recovery, and known failure should not be represented by unexplained visual silence or a frozen-looking frame.
+
+When exact progress is unavailable, Kivori should prefer truthful indeterminate activity over invented progress percentages.
+
 ### 9.1 Takeover state
 
 Takeover states replace normal desktop representation when normal interaction is unavailable or intentionally suspended.
@@ -310,6 +325,8 @@ Protection may include lower brightness, reduced animation, subtle pixel reposit
 
 When fully in Display Sleep, only deliberate configured controls wake the display by default. The first deliberate interaction wakes the display only and does not execute the assigned desktop action. In Dim or Low Motion states, interaction executes normally while restoring full presentation.
 
+Display Sleep is intentionally blank; it must not be confused with an unexplained blank caused by a normal waiting, processing, or error condition.
+
 ## 13. Feedback and Do Not Disturb
 
 Kivori distinguishes user-initiated feedback from unsolicited background feedback.
@@ -325,7 +342,9 @@ MVP should provide a software-independent recovery gesture:
 
 Recovery must not erase configuration. Factory reset must use a separate, harder-to-trigger procedure.
 
-Firmware update is an intentional takeover state and must not look like an unexplained connection failure. If full rendering is unavailable during low-level update, the simplest reliable hardware indication or a blank display is acceptable while Kivori Desktop shows progress when possible.
+Recovery should visibly acknowledge the hold and, where practical, communicate that the device is progressing toward reboot rather than appearing stuck.
+
+Firmware update is an intentional takeover state and must not look like an unexplained connection failure. While the normal renderer is available, the device should show an update/activity presentation. If exact firmware-update progress is not trustworthy, Kivori should show indeterminate activity rather than fake percentage progress. If the renderer becomes unavailable during a low-level update, Kivori should use the simplest reliable hardware indication available, while Kivori Desktop shows update state/progress where possible.
 
 ## 15. Multi-Device Behavior
 
@@ -349,6 +368,7 @@ Required product capabilities:
 - immediate input acknowledgement and honest confirmation semantics;
 - real desktop state synchronization where observable;
 - buddy + takeover + system-health + secondary-indicator presentation model;
+- intentional visual feedback for user-relevant waiting, processing, restriction, transition, failure, and recovery states;
 - predictable focus and gesture ownership;
 - connection/session recovery states;
 - desktop configuration UI;
@@ -385,5 +405,6 @@ A product increment is aligned with this PRD only if it preserves these invarian
 6. **No state invention:** Kivori represents observable state only.
 7. **No passive-device ambiguity:** Passive devices do not behave like Active or Monitor devices.
 8. **Recoverability:** basic hardware recovery remains possible without healthy desktop software.
+9. **No ambiguous silence:** when Kivori can render, user-relevant waiting, processing, restricted, transitional, failure, and recovery states have intentional visual feedback rather than appearing frozen or accidentally blank.
 
 Detailed normative behavior and acceptance criteria live in [`docs/user-story-contract.md`](docs/user-story-contract.md).
