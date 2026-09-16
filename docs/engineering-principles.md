@@ -5,9 +5,9 @@
 
 ## Purpose and authority
 
-These principles govern how Kivori is engineered. They do **not** redefine the product. Product behavior and user guarantees are authoritative in [`../PRD.md`](../PRD.md) and [`user-story-contract.md`](./user-story-contract.md).
+These principles govern how Kivori is engineered. They do **not** redefine the product. Product behavior and user guarantees are authoritative in [`product/prd.md`](./product/prd.md) and [`product/user-story-contract.md`](./product/user-story-contract.md).
 
-When technical evidence changes, implementation details may change. Durable architecture choices belong in [`adr/`](./adr/); [`technical-research.md`](./technical-research.md) is explicitly non-normative and challengeable. Superpowers specs/plans describe individual pieces of work and must remain consistent with the product contract.
+When technical evidence changes, implementation details may change. Durable architecture choices belong in [`adr/`](./adr/); [`research/technical-research.md`](./research/technical-research.md) is explicitly non-normative and challengeable. Superpowers specs/plans describe individual pieces of work and must remain consistent with the product contract.
 
 ## 1. Observable truth over convenient assumptions
 
@@ -85,4 +85,4 @@ Do not preserve an approach merely because it was written first.
 
 New substantial engineering work should use the Superpowers workflow reflected in [`superpowers/`](./superpowers/): brainstorm/research, approve a design, write an implementation plan, implement with tests, verify before claiming completion, and request/review code changes with evidence.
 
-Feature-specific historical artifacts may remain for auditability, but they do not override the current product contract or accepted ADRs.
+Feature-specific records live under [`features/`](./features/). They preserve requirements, architecture, contracts, evidence, and closure state for an implemented slice, but they do not override the current product contract or accepted ADRs.

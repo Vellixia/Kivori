@@ -6,50 +6,45 @@ Kivori is a physical desktop companion that lets people control their computer t
 
 ## Project status
 
-The repository currently contains the completed software foundation for Feature 001 (device connection, deterministic rendering, protocol/session handling, Device Studio, firmware host simulation, and the physical ESP32-C3/ST7789 runtime). Feature 001 is **software complete; manual acceptance remains outstanding** for the physical/platform checks recorded in the validation ledger.
+Feature 001 (Device Connection Foundation) established the current connection, protocol, deterministic rendering, Device Studio, firmware simulation, and ESP32-C3/ST7789 runtime foundation. Its software work is complete; remaining physical/platform acceptance items are recorded in its validation ledger.
 
-The product contract has since expanded beyond that foundation. Product behavior is defined by the PRD and User Story Contract; technical research documents possible implementations but is intentionally challengeable.
+The product contract now extends beyond Feature 001. Product behavior is defined by the PRD and User Story Contract. Technical research records implementation possibilities and uncertainties; accepted durable technical choices belong in ADRs.
 
 ## Documentation map
 
 | Need | Source |
 |---|---|
-| Product goals, scope, and acceptance gates | [`PRD.md`](PRD.md) |
-| Exact user-visible behavioral contract | [`docs/user-story-contract.md`](docs/user-story-contract.md) |
-| Engineering invariants and decision hierarchy | [`docs/engineering-principles.md`](docs/engineering-principles.md) |
-| Cross-platform implementation research | [`docs/technical-research.md`](docs/technical-research.md) |
+| Product goals, scope, and acceptance gates | [`docs/product/prd.md`](docs/product/prd.md) |
+| Exact user-visible behavior | [`docs/product/user-story-contract.md`](docs/product/user-story-contract.md) |
+| Engineering invariants and decision discipline | [`docs/engineering-principles.md`](docs/engineering-principles.md) |
+| Cross-platform technical research | [`docs/research/technical-research.md`](docs/research/technical-research.md) |
 | Accepted durable architecture decisions | [`docs/adr/`](docs/adr/) |
-| Current Feature 001 built-system overview | [`docs/architecture.md`](docs/architecture.md) |
-| Feature 001 requirements, research, contracts, plan/history | [`specs/001-device-connection-foundation/`](specs/001-device-connection-foundation/) |
-| Feature 001 closure status | [`specs/001-device-connection-foundation/closure-status.md`](specs/001-device-connection-foundation/closure-status.md) |
-| Physical/manual validation ledger | [`docs/validation-checklist.md`](docs/validation-checklist.md) |
+| Feature 001 requirements, implementation record, contracts, and evidence | [`docs/features/001-device-connection-foundation/`](docs/features/001-device-connection-foundation/) |
+| Feature 001 closure status | [`docs/features/001-device-connection-foundation/closure-status.md`](docs/features/001-device-connection-foundation/closure-status.md) |
+| Physical/manual validation ledger | [`docs/features/001-device-connection-foundation/validation-checklist.md`](docs/features/001-device-connection-foundation/validation-checklist.md) |
 | Superpowers design records | [`docs/superpowers/specs/`](docs/superpowers/specs/) |
 | Superpowers implementation plans | [`docs/superpowers/plans/`](docs/superpowers/plans/) |
 | Wokwi simulation | [`sim/wokwi/README.md`](sim/wokwi/README.md) |
 
-### Document authority
+## Document authority
 
-For future product work, use this order when documents appear to disagree:
+When documents disagree, use this hierarchy:
 
 1. **PRD + User Story Contract** — product behavior and user guarantees.
 2. **Engineering Principles** — implementation invariants and development discipline.
-3. **ADRs** — accepted durable technical decisions.
-4. **Technical Research** — researched suggestions, alternatives, caveats, and required spikes; not immutable.
-5. **Feature records** — requirements/evidence for a particular implemented slice.
-6. **Superpowers specs/plans** — design and execution artifacts for a particular change.
-
-Historical Feature 001 `plan.md`, `tasks.md`, and checklists remain in the repository as audit history. They are **not the active planning workflow**.
+3. **ADRs** — durable technical decisions that have been explicitly accepted.
+4. **Technical Research** — researched suggestions, alternatives, caveats, and required validation; intentionally challengeable.
+5. **Feature records** — requirements, architecture, validation, contracts, and evidence for a particular implemented slice.
+6. **Superpowers specs/plans** — design and execution artifacts for individual changes.
 
 ## Development workflow
 
-Kivori uses **Superpowers-style brainstorming, design, planning, implementation, debugging, review, and verification** for new engineering work. Spec Kit is retired from this repository.
-
-A typical change should flow as:
+Kivori uses **Superpowers** as the active workflow for new engineering work. Spec Kit is retired.
 
 ```text
 problem / idea
     ↓
-brainstorm and research
+brainstorm + research
     ↓
 approved design (docs/superpowers/specs/)
     ↓
@@ -59,26 +54,38 @@ implementation + tests
     ↓
 verification / review
     ↓
-ADR update when a durable architecture choice was made
+ADR when a durable architecture choice is accepted
 ```
 
-Do not turn temporary implementation suggestions into product requirements. If implementation evidence disproves a research recommendation, update the research/ADR while preserving the PRD/User Story contract.
+Research recommendations are not mandates. If implementation evidence disproves a recommendation, update the research or ADR while preserving the product contract.
 
 ## Repository layout
 
 ```text
-apps/desktop/                 Tauri native core + React UI
-crates/                       shared host/firmware Rust crates
-firmware/esp32-c3/            isolated no_std ESP32-C3 workspace
-assets/                       source visual assets
-sim/wokwi/                    hardware simulation scenarios
-specs/                        historical feature requirement/evidence packages
-docs/adr/                     durable architecture decisions
-docs/superpowers/             active design and implementation planning records
-tests/                        cross-cutting host tests / golden frames
-tools/                        build/development tools
-scripts/                      CI and validation scripts
+Kivori/
+├── README.md
+├── docs/
+│   ├── product/
+│   │   ├── prd.md
+│   │   └── user-story-contract.md
+│   ├── engineering-principles.md
+│   ├── research/
+│   │   └── technical-research.md
+│   ├── adr/
+│   ├── features/
+│   │   └── 001-device-connection-foundation/
+│   └── superpowers/
+│       ├── specs/
+│       └── plans/
+├── apps/
+├── crates/
+├── firmware/
+├── sim/
+├── tests/
+└── tools/
 ```
+
+Feature records contain durable project knowledge, not workflow scaffolding. The retired Feature 001 Spec Kit `plan.md`, `tasks.md`, and requirement-writing checklist remain available in Git history if historical investigation is needed.
 
 ## Common commands
 
@@ -97,4 +104,4 @@ just golden            # deterministic rendering golden-frame tests
 just check-boundaries  # shared-crate dependency firewall
 ```
 
-See the feature quickstart and Wokwi README for environment-specific setup and physical/simulator validation.
+See [`docs/features/001-device-connection-foundation/quickstart.md`](docs/features/001-device-connection-foundation/quickstart.md) and [`sim/wokwi/README.md`](sim/wokwi/README.md) for environment-specific setup and validation detail.
