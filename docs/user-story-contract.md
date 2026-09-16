@@ -78,6 +78,12 @@ The following rules apply across all user stories.
 50. **Transient presentation restores current underlying truth.** When a transient ends, Kivori MUST return to the actual current underlying state, including Running/Busy when long-running work remains active, rather than defaulting to Idle.
 51. **Desktop Test Action is deliberate user intent.** A user-triggered Test Action from Kivori Desktop belongs to the deliberate-interaction feedback class, not ordinary unsolicited/background feedback.
 52. **Single-gesture ownership is device-wide in MVP.** While one ordinary physical gesture owns input, other ordinary rotary or button controls, including auxiliary buttons, MUST NOT dispatch a second mapped action unless a future explicit multi-input gesture type defines that combination.
+53. **Discrete button mappings do not implicitly key-repeat.** A release-qualified discrete mapping produces one action per valid press/release; repeating while held requires an explicit repeating/continuous action type.
+54. **A normal rotary binding owns both directions.** A bidirectional `Rotate` binding reserves clockwise and counter-clockwise detents as one logical control; unrelated scopes MUST NOT silently split the two directions.
+55. **Update compatibility is checked before installation.** Kivori Desktop MUST evaluate known desktop/firmware/hardware compatibility constraints and required installation order before changing either component.
+56. **Update artifacts are authenticated.** Desktop and firmware update artifacts MUST pass the product's integrity/authenticity checks before installation.
+57. **Firmware recovery must exist below the application image.** Production hardware MUST preserve an application-independent ROM/bootloader recovery path so corrupt Kivori firmware does not permanently remove the ability to restore the device.
+58. **Update availability is not installation consent.** A normal or recommended available update MUST NOT silently trigger a disruptive firmware flash merely because a newer version exists.
 
 ---
 
@@ -104,6 +110,25 @@ Examples include:
 
 `System Volume` and `Discord Volume`, for example, are distinct actions. Activating a Discord profile MUST NOT silently redefine a generic `System Volume` action as Discord process volume.
 
+### Discrete button repeat semantics
+
+Normal discrete button mappings are release-qualified and fire once per valid discrete press/release.
+
+Examples include:
+
+- `Next Track`;
+- `Previous Track`;
+- one-shot `Volume Up` / `Volume Down` step actions;
+- ordinary shortcuts.
+
+Holding a discrete mapping MUST NOT implicitly start OS-style key-repeat merely because the physical button remains down.
+
+A user who wants repeated/continuous behavior must use a distinct explicit action/input type such as **Repeat While Held** if/when that type is supported.
+
+An explicit repeating action type MUST define its own start, repeat-rate, stop, feedback, context, and recovery-arbitration semantics; it MUST NOT be inferred from a normal discrete mapping.
+
+On the primary recovery-capable button, implicit repeat is especially prohibited because an early repeating side effect could occur before recovery ownership is known.
+
 ### Rotary action contract
 
 Each rotary-capable action MAY define:
@@ -127,6 +152,25 @@ Example:
 Rapid one-detent oscillation therefore remains effectively at baseline sensitivity. This is intentional: sustained direction expresses speed intent, while repeated reversal expresses precision intent.
 
 For actions such as frame-accurate or fine audio scrubbing, acceleration MAY be disabled entirely.
+
+### Global rotary binding scope
+
+A normal `Rotate` action is one bidirectional logical control.
+
+If a Global binding assigns:
+
+`Rotate -> Master Volume`
+
+then both directions belong to that Global logical rotary binding:
+
+- clockwise adjusts Master Volume in its positive direction;
+- counter-clockwise adjusts Master Volume in its negative direction.
+
+An application profile MUST NOT silently replace only one direction with an unrelated action while leaving the opposite direction owned by the Global binding.
+
+For MVP, an application-specific override MAY replace the complete logical `Rotate` binding according to the configured precedence rules.
+
+A future **Directional Rotary** configuration MAY expose clockwise/counter-clockwise as independent bindings, but only as an explicit mode with visible conflict and precedence behavior.
 
 ### Acceleration ceiling
 
@@ -191,6 +235,11 @@ Example:
 
 - [ ] Assigned actions expose explicit action identity/scope.
 - [ ] App profiles select actions without mutating action meaning.
+- [ ] A discrete button mapping emits one action per valid release and does not implicitly repeat while held.
+- [ ] Continuous/repeating hold behavior requires an explicit action/input type.
+- [ ] A Global bidirectional Rotate binding owns both clockwise and counter-clockwise directions.
+- [ ] Application profiles do not silently steal one direction from a normal Global Rotate binding.
+- [ ] Any future directional rotary split is explicit rather than inferred.
 - [ ] Rotary actions can define action-specific sensitivity and acceleration.
 - [ ] Acceleration accumulates only across same-direction detents.
 - [ ] Every validated direction flip resets acceleration to 1x.
@@ -459,6 +508,8 @@ Normal short-press actions are **release-qualified** for MVP.
 
 Initial short-press hold cutoff: **500 ms**.
 
+A normal discrete press MUST NOT begin implicit key-repeat while waiting for release classification. Repeat-while-held behavior is a separate explicit action type, not a property of an ordinary short-press mapping.
+
 For the primary recovery-capable button, a mapped **Hold** action is also release-qualified rather than firing immediately at threshold.
 
 Initial recovery-ownership threshold: **~2 seconds of continuous hold**. The final MCU recovery threshold remains **~10 seconds total from the original key-down**.
@@ -575,6 +626,7 @@ For a currently active continuous gesture, the system MAY retain the latest targ
 - [ ] Final display reconciles against confirmed state.
 - [ ] 250 ms without a detent ends a rotary gesture for the initial MVP target.
 - [ ] A short press is eligible only when released within the initial 500 ms cutoff.
+- [ ] Ordinary short-press mappings do not emit implicit repeat events while held.
 - [ ] A mapped Hold on the primary recovery-capable button is armed after the Hold threshold but does not execute merely on threshold crossing.
 - [ ] Releasing after 500 ms but before recovery ownership may execute the configured Hold action.
 - [ ] Crossing the initial ~2 s recovery-ownership threshold cancels the mapped Hold for that gesture.
@@ -651,6 +703,19 @@ Initial passive focus-stabilization target: **300-500 ms** before committing to 
 Momentary overlays and brief focus theft SHOULD NOT produce visible profile thrashing.
 
 Transient system overlays MAY be classified as non-profile-owning contexts.
+
+### Global/application binding precedence
+
+Binding precedence operates on the configured **logical input scope**, not raw electrical direction fragments.
+
+For MVP:
+
+- a Global bidirectional `Rotate` binding reserves the complete logical rotary gesture when no profile override replaces it;
+- an application profile MAY explicitly replace that complete `Rotate` binding according to normal profile precedence;
+- an application profile MUST NOT silently override only clockwise or only counter-clockwise while the other direction remains owned by the unrelated Global binding;
+- binding-conflict UI SHOULD explain when an application override replaces a Global logical control.
+
+A future directional rotary mode MAY expose each direction independently, but that mode must be explicit and cannot be inferred from conflicting Global/profile assignments.
 
 ### Virtual desktop/workspace transitions
 
@@ -782,6 +847,9 @@ MVP operation is scoped to the user's normal interactive session rather than req
 - [ ] Mouse hover does not switch profiles.
 - [ ] Passive focus changes require stable OS focus before visible profile commitment.
 - [ ] Very brief focus theft does not produce a committed profile swap.
+- [ ] A Global bidirectional Rotate binding reserves both directions unless the complete binding is explicitly overridden.
+- [ ] Profile precedence does not silently split opposite rotary directions across unrelated scopes.
+- [ ] Binding-conflict behavior is explainable in Desktop.
 - [ ] Virtual-desktop/workspace transition UI does not own a normal app profile.
 - [ ] Newly visible app after workspace switch uses normal stabilization.
 - [ ] Deliberate Kivori input during workspace-switch stabilization commits the pending app immediately.
@@ -892,7 +960,8 @@ This includes, at minimum:
 - Triggered / Unverified;
 - Context Lost / cancelled action where feedback is useful;
 - Passive / Unassigned;
-- active hardware recovery hold.
+- active hardware recovery hold;
+- firmware rollback/recovery mode when known.
 
 The presentation MAY combine buddy pose/expression, iconography, text, motion, progress treatment, or other visual language appropriate to the hardware.
 
@@ -916,6 +985,7 @@ Defined takeover concepts include:
 - Permission Required;
 - Host Starting / Resuming;
 - Firmware Updating;
+- Firmware Recovery / Restoring;
 - Reconnecting;
 - Disconnected;
 - Waiting;
@@ -957,15 +1027,29 @@ During this grace state, absence of the user's Kivori session MUST NOT immediate
 
 When rendering is available, Host Starting / Resuming SHOULD visibly communicate that Kivori is waiting for the host session rather than appearing idle or frozen.
 
-### Firmware Updating
+### Firmware Updating and recovery presentation
 
 Firmware update MUST be represented as an intentional state rather than an unexplained crash.
+
+When phase information is known, presentation SHOULD distinguish meaningful update stages such as:
+
+- Preparing;
+- Downloading / Transferring;
+- Firmware Updating;
+- Verifying;
+- Restarting;
+- Restoring Previous Firmware;
+- Recovery Mode.
 
 While the normal renderer remains available:
 
 - Firmware Updating SHOULD use a clear update/activity presentation;
 - trustworthy progress MAY be shown when available;
 - if exact progress is not trustworthy, Kivori SHOULD use indeterminate update activity rather than inventing a percentage.
+
+If a new firmware image fails validation and rollback restores the previous image, Kivori Desktop MUST NOT call the update successful; it SHOULD clearly report **Update Failed — Previous Firmware Restored** or equivalent.
+
+If the device is in application-independent bootloader/recovery mode, Desktop SHOULD present an explicit recovery flow rather than treating the device as an ordinary Disconnected unit.
 
 If full rendering becomes unavailable during low-level update, Kivori SHOULD use the simplest reliable hardware-supported indication available. A temporarily blank display is acceptable only when the normal renderer and any other reliable device indication are genuinely unavailable; Kivori Desktop SHOULD present update state/progress where possible.
 
@@ -1056,6 +1140,8 @@ Active profile information SHOULD normally appear transiently after a profile ch
 - [ ] Passive assignment does not disable MCU recovery.
 - [ ] Fast User Switching does not unnecessarily flash through Waiting.
 - [ ] Firmware update does not look like an unexplained disconnect or frozen screen when any reliable indication is available.
+- [ ] Firmware rollback/recovery is distinguishable from successful update completion.
+- [ ] Low-level recovery mode receives an intentional Desktop recovery presentation when detectable.
 - [ ] Mic and other protected system/privacy indicators cannot be displaced by custom app indicators.
 - [ ] A newly active higher-priority indicator can preempt immediately.
 - [ ] Lower-priority indicator promotion waits for the stabilization window before causing layout reflow.
@@ -1289,7 +1375,7 @@ Urgent wake classification SHOULD be narrow and deterministic. It MUST NOT becom
 
 ## User Story
 
-**As a user, I want Kivori to distinguish between normal absence, startup, intentional interruption, sleep, user switching, passive assignment, communication failure, hardware recovery, and host execution state.**
+**As a user, I want Kivori to distinguish between normal absence, startup, intentional interruption, sleep, user switching, passive assignment, communication failure, hardware recovery, firmware recovery, and host execution state.**
 
 ## Contract
 
@@ -1415,6 +1501,37 @@ Recovery MUST:
 - remain available while the display is in Display Sleep;
 - bypass normal profile/action suppression because it is an out-of-band device recovery path.
 
+### Application-independent bootloader recovery
+
+The ~10 second hold depends on firmware being healthy enough to observe the input. It is not the final recovery layer.
+
+Production Kivori hardware MUST expose a documented application-independent recovery path into the MCU's built-in ROM/download bootloader or equivalent immutable recovery environment.
+
+That path MUST:
+
+- remain available even if the Kivori application image cannot boot;
+- not depend on Kivori Desktop already having a healthy application-level session with the device;
+- provide a practical way to reset/enter recovery through the final PCB/enclosure/support design;
+- preserve service/test access required to restore firmware.
+
+For the ESP32-C3 baseline, implementation specifications may map this requirement to the MCU's documented boot/reset strapping and ROM serial-download mechanism. The product contract intentionally does not hard-code one final enclosure gesture or PCB pad layout.
+
+When Kivori Desktop can identify a device in this low-level recovery mode, it SHOULD present **Firmware Recovery / Restore Device** rather than ordinary Disconnected.
+
+### Rollback-safe firmware update
+
+Where the MCU/platform supports it, normal firmware installation SHOULD use a rollback-safe inactive-slot/A-B strategy rather than destroying the only known-good application image in place.
+
+A newly installed firmware image SHOULD remain pending/unconfirmed until it reaches the product-defined boot/health validation point.
+
+If the new image fails that validation and the platform can recover automatically:
+
+- the previous known-good image SHOULD be restored/booted;
+- Kivori Desktop MUST report the attempted update as failed/restored rather than successful;
+- the failed update MUST NOT loop indefinitely on every reboot.
+
+The application-independent bootloader path remains the final recovery layer if application-level rollback cannot execute.
+
 ### Recovery ownership and mapped Hold actions
 
 The primary recovery-capable button uses an initial **~2 second recovery-ownership threshold** before the final ~10 second reboot threshold.
@@ -1464,7 +1581,7 @@ When the button is pressed while already awake/Connected:
 
 Factory reset MUST use a separate, harder-to-trigger mechanism.
 
-If firmware is so compromised that it cannot observe the recovery gesture, this contract does not claim a software-detectable hold can recover that condition; hardware-level boot/recovery mechanisms may be specified separately.
+If application firmware is so compromised that it cannot observe the normal recovery gesture, the low-level bootloader recovery path above is the required next recovery layer.
 
 ## Acceptance Criteria
 
@@ -1483,6 +1600,10 @@ If firmware is so compromised that it cannot observe the recovery gesture, this 
 - [ ] Recovery remains available in Passive state.
 - [ ] Recovery remains available during Protected/restricted desktop contexts.
 - [ ] Recovery remains available in Display Sleep and wakes the display immediately on key-down.
+- [ ] Production hardware provides a recovery path that does not require valid Kivori application firmware.
+- [ ] A device in detectable ROM/bootloader recovery mode is distinguishable from ordinary Disconnected.
+- [ ] Rollback-safe firmware installation preserves/reverts to a known-good image when platform support permits it.
+- [ ] Failed validation after an update is not reported as successful merely because the device rebooted.
 - [ ] A mapped Hold on the primary recovery-capable button does not execute merely at threshold crossing.
 - [ ] Releasing before recovery ownership may execute an armed Hold action when configured and permitted.
 - [ ] Crossing recovery ownership cancels the pending Hold action for that gesture.
@@ -1496,11 +1617,11 @@ If firmware is so compromised that it cannot observe the recovery gesture, this 
 
 ---
 
-# US11 — Desktop App Configuration, Machine Scope, and Device Assignment
+# US11 — Desktop App Configuration, Machine Scope, Device Assignment, and Updates
 
 ## User Story
 
-**As a user, I want Kivori Desktop to act as the control center while keeping machine, user, and device ownership explicit.**
+**As a user, I want Kivori Desktop to act as the control center while keeping machine, user, device ownership, versions, and update status explicit.**
 
 ## Contract
 
@@ -1528,7 +1649,12 @@ Kivori Desktop SHOULD provide configuration for:
 - buddy-state preview;
 - action testing;
 - optional explicit transient-overlay classification rules;
-- firmware updates;
+- installed Desktop version;
+- connected-device firmware version;
+- connected-device hardware revision/identity where observable;
+- update availability/status;
+- desktop application updates;
+- firmware updates/recovery;
 - configuration reset.
 
 The desktop configuration window MUST NOT need to remain visible for ordinary background operation.
@@ -1569,6 +1695,106 @@ Such an override:
 - MUST NOT rely on process injection or hidden anti-cheat/game hooks;
 - MUST NOT bypass Protected/restricted-context classification;
 - SHOULD be scoped narrowly enough to avoid turning unrelated windows from the same host process into overlays accidentally.
+
+### Update discovery and release metadata
+
+Kivori Desktop SHOULD use one authoritative product release source/manifest (or equivalent trusted release metadata) to coordinate Desktop and firmware versions.
+
+The update metadata SHOULD be sufficient to determine at least:
+
+- available Desktop version(s) and platform-specific artifact;
+- available firmware version(s);
+- compatible hardware revision(s);
+- minimum/compatible Desktop version required by firmware;
+- minimum/compatible firmware requirements where Desktop behavior depends on them;
+- release notes or meaningful change summary;
+- update importance such as Normal, Recommended, Critical/Security, or Compatibility Required;
+- artifact integrity/authentication information.
+
+Kivori Desktop MUST NOT treat a version string alone as enough evidence that an artifact is safe/applicable to the connected device.
+
+### Version and update presentation
+
+Kivori Desktop SHOULD make installed/current versions easy to inspect, including:
+
+- Desktop version;
+- device firmware version;
+- hardware revision/identity where observable;
+- whether each component is up to date;
+- last successful update check when useful;
+- available release notes and compatibility requirements.
+
+Routine update checks MAY happen in the background and SHOULD NOT create unnecessary interruption when nothing actionable changed.
+
+When an update is available, the UI SHOULD make the distinction between available, downloading, ready, installing, restarting, verifying, restored/rolled back, recovery-required, and completed states understandable.
+
+### Update consent and severity
+
+For Normal and Recommended firmware releases:
+
+- update availability MUST NOT itself authorize an immediate flash;
+- Kivori Desktop SHOULD ask for clear user intent such as `Update Kivori` / `Update All` before disruptive installation begins.
+
+Critical/Security or Compatibility Required updates MAY use stronger messaging or block incompatible feature use, but any mandatory-update policy MUST be explicit rather than silently flashing during ordinary activity.
+
+Desktop self-update behavior MAY follow platform-appropriate updater semantics, but update installation/restart state MUST remain understandable to the user.
+
+### Compatibility and `Update All`
+
+Before installing Desktop or firmware updates, Kivori Desktop MUST evaluate known compatibility constraints.
+
+If the desired firmware requires a newer Desktop version, Desktop MUST be updated first.
+
+If a Desktop version requires a particular firmware range for a capability, the UI MUST communicate that requirement rather than pretending the incompatible pair is fully supported.
+
+`Update All` MUST:
+
+1. resolve the required dependency order;
+2. show the user what components will change;
+3. install one dependency stage at a time when required;
+4. re-evaluate compatibility/state after a component restarts;
+5. avoid launching a dependent firmware flash if the prerequisite Desktop update failed.
+
+Kivori MUST NOT intentionally install a known-incompatible Desktop/firmware pairing merely because both artifacts are individually newer.
+
+### Artifact authentication
+
+Desktop and firmware update artifacts MUST be authenticated/integrity-checked before installation according to the implementation's signed-update/security design.
+
+An artifact that fails verification MUST NOT be installed and MUST be reported as an update verification/integrity failure rather than ordinary network failure or successful update.
+
+The contract does not require one specific signing scheme, but it requires that production update delivery be designed around authenticated artifacts rather than trusting an unauthenticated downloaded binary solely because it came from an expected filename/URL.
+
+### Desktop application update behavior
+
+When a Desktop update is installed and the Kivori background service/application intentionally restarts:
+
+- the physical device SHOULD use Reconnecting / Host Updating semantics rather than unexpected Disconnected when that intent is known;
+- physical inputs MUST NOT queue for later replay during the update restart;
+- after Desktop restarts, current device/desktop truth MUST be reconciled;
+- stale pre-update transients MUST NOT be replayed.
+
+### Firmware update flow
+
+Before firmware installation, Kivori Desktop SHOULD verify:
+
+- selected/connected target device identity;
+- hardware revision compatibility;
+- Desktop/firmware compatibility;
+- artifact authentication/integrity;
+- usable transport/update prerequisites;
+- whether a recoverable installation path is available for the target hardware.
+
+During installation:
+
+- normal mappings MUST be suspended for the target device;
+- the device/Desktop SHOULD expose truthful update phase/progress as defined in US7;
+- the original firmware-update command MUST NOT be blindly replayed after an uncertain disconnect;
+- the update result MUST be based on actual post-update validation/reconciliation, not simply the fact that a reboot occurred.
+
+If rollback restores the previous firmware, Desktop MUST surface that outcome explicitly.
+
+If the device enters application-independent bootloader recovery mode, Desktop SHOULD offer a **Restore Firmware** workflow and the documented physical procedure required to enter that mode when automatic detection is unavailable.
 
 ### Machine scope
 
@@ -1624,6 +1850,17 @@ Future multi-device roles MAY be introduced only through explicit assignment sem
 - [ ] Test/preview software wake preserves idle history and returns to Display Sleep unless new deliberate activity occurs.
 - [ ] Test/preview commands do not bypass Protected/permission/connection/assignment restrictions.
 - [ ] Explicit overlay rules can be configured without invasive hooks and cannot bypass Protected classification.
+- [ ] Desktop, firmware, and hardware revision/version information is visible when observable.
+- [ ] Update metadata encodes compatibility and artifact verification information, not only a latest version string.
+- [ ] Normal/recommended firmware updates require clear user intent before disruptive flashing begins.
+- [ ] `Update All` computes dependency order and does not flash firmware after a failed required Desktop update.
+- [ ] Known-incompatible Desktop/firmware combinations are not silently installed as if supported.
+- [ ] Desktop and firmware artifacts are authenticated/integrity-checked before installation.
+- [ ] Failed artifact verification prevents installation and is surfaced distinctly.
+- [ ] Intentional Desktop updater restart uses Reconnecting/Host Updating semantics when known.
+- [ ] Firmware update success is validated after reboot rather than inferred from reboot alone.
+- [ ] Automatic rollback is reported as update failure/restoration, not success.
+- [ ] Detectable bootloader recovery mode offers a restore/recovery workflow.
 - [ ] System/privacy indicator priority cannot be overridden by custom app indicator ordering.
 - [ ] Profiles are scoped per machine and OS user in MVP.
 - [ ] Desktop background behavior continues without the configuration window being visible.
@@ -1645,7 +1882,8 @@ Future multi-device roles MAY be introduced only through explicit assignment sem
 | Sleeping / Locked | Host explicitly inactive/restricted | No normal custom actions |
 | Protected | Secure/protected system context | No normal custom actions; recovery remains available |
 | Permission Required | Broad capability restriction requiring user intervention | Only unaffected capabilities |
-| Firmware Updating | Intentional device firmware update | No normal controls |
+| Firmware Updating | Intentional device firmware update | No normal controls; truthful update phase/progress where available |
+| Firmware Recovery / Restoring | Update rollback or application-independent restore path is active/required | No normal controls; restore/recovery only |
 
 # 5. Initial Timing Reference
 
@@ -1716,13 +1954,15 @@ Priority escalation SHOULD appear immediately. When a higher-priority indicator 
 When rendering is available, the product SHOULD preserve this presentation intent:
 
 1. safety/privacy/urgent state;
-2. Layer 1 takeover/recovery state;
+2. Layer 1 takeover/recovery/update state;
 3. active deliberate user interaction or running action feedback, including Desktop Test Action feedback;
 4. system-health indication;
 5. primary buddy state;
 6. secondary indicators.
 
 Once recovery ownership begins, recovery presentation outranks any pending mapped Hold preview for the same button gesture.
+
+Firmware Updating / Firmware Recovery presentation outranks ordinary interaction feedback for the target device.
 
 This priority does not authorize false progress or hidden state mutation; it only governs which truthful information gets visual precedence.
 
@@ -1737,6 +1977,8 @@ The following are explicitly outside this contract's MVP guarantees:
 - automatic inference of ambiguous sub-app identity;
 - implicit simultaneous-input chords;
 - simultaneous independent ordinary actions from multiple physical controls while another gesture owns input;
+- implicit OS-style key-repeat from an ordinary release-qualified discrete button mapping;
+- silently splitting one normal bidirectional rotary control between unrelated Global and application-profile actions;
 - automatic transactional rollback of successfully completed earlier macro steps after a later step fails;
 - acceleration above 5x the configured action base step;
 - reconstructing rotary detents the hardware did not observe;
@@ -1760,10 +2002,14 @@ The following are explicitly outside this contract's MVP guarantees:
 - visibility into physical device states that are not exposed through a trustworthy signal;
 - fully user-defined priority that can demote system/privacy indicators below custom app indicators;
 - forensic guarantees about erasing every historical RAM byte during local OS-user switching, beyond the requirement that previous-user session state becomes non-renderable and non-reusable;
-- fabricated progress percentages when trustworthy progress is unavailable.
+- fabricated progress percentages when trustworthy progress is unavailable;
+- silently flashing a Normal/Recommended firmware update solely because a newer release exists;
+- installing update artifacts that fail authenticity/integrity verification;
+- intentionally installing a known-incompatible Desktop/firmware/hardware combination as though it were supported;
+- treating a reboot by itself as proof that firmware update succeeded.
 
 # 8. Change Control
 
 Any implementation or future feature that intentionally violates a MUST-level rule in this contract should update this contract and the root PRD in the same product decision/PR, including the reason for the behavior change.
 
-Implementation-specific timing, APIs, protocols, storage formats, or OS adapters may evolve without changing this contract as long as the user-observable behavior remains compliant.
+Implementation-specific timing, APIs, protocols, storage formats, signing schemes, bootloader mechanics, update endpoints, or OS adapters may evolve without changing this contract as long as the user-observable behavior remains compliant.
