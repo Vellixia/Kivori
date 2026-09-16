@@ -2,7 +2,7 @@
 
 **Status:** Product baseline  
 **Date:** 2026-09-16  
-**Behavioral contract:** [`docs/user-story-contract.md`](docs/user-story-contract.md)
+**Behavioral contract:** [`user-story-contract.md`](./user-story-contract.md)
 
 ## 1. Product Summary
 
@@ -538,4 +538,4 @@ A product increment is aligned with this PRD only if it preserves these invarian
 9. **No ambiguous silence:** when Kivori can render, user-relevant waiting, processing, restricted, transitional, failure, and recovery states have intentional visual feedback rather than appearing frozen or accidentally blank.
 10. **Compatibility-safe updates:** desktop and firmware updates are authenticated, compatibility-checked, ordered safely, and leave a defined recovery path if installation fails.
 
-Detailed normative behavior and acceptance criteria live in [`docs/user-story-contract.md`](docs/user-story-contract.md).
+Detailed normative behavior and acceptance criteria live in [`user-story-contract.md`](./user-story-contract.md).
