@@ -45,13 +45,10 @@ fw-test:
     cd firmware/esp32-c3 && cargo test --features host-sim --target $(rustc -vV | sed -n 's/^host: //p')
 
 # Flashes and monitors via the `espflash` runner in .cargo/config.toml.
-#
-# NOTE: the `embedded` build brings up the clock and USB Serial/JTAG and then deliberately STOPS before the
-# render loop, because no confirmed panel profile exists (controller, pin map, offsets are unmeasured — see
-# docs/validation-checklist.md items 23-25). It will NOT draw scenes. Add a real profile to
-# firmware/esp32-c3/src/profile.rs first; until then use `just sim-test` for end-to-end behaviour.
+# The physical ESP32-C3 + ST7789 profile is verified in docs/validation-checklist.md; simulator profiles
+# remain separate evidence and are not substitutes for physical wiring/controller validation.
 
-# Flash + monitor a real board (see the note above: no panel profile yet, so no scenes).
+# Flash + monitor the verified physical board profile.
 fw-flash:
     cd firmware/esp32-c3 && cargo run --release --features embedded
 
@@ -65,7 +62,7 @@ sim-build:
 sim-test: sim-build
     bash scripts/test-wokwi.sh
 
-# Offline checks for the gate's own tooling (no token, no simulator).
+# Offline checks for the simulator's own tooling (no token, no simulator).
 sim-check:
     cargo test -p kivori-wokwi-vectors -p kivori-wokwi-vcd
     bash scripts/test-wokwi-evidence.sh
