@@ -63,6 +63,12 @@ The following rules apply across all user stories.
 35. **Explicit desktop test intent may wake Display Sleep.** A user-triggered Test Action or Preview Buddy State command from Kivori Desktop is explicit intent and MAY wake the display without requiring a prior physical wake gesture.
 36. **Takeover states preempt active gestures.** When a Layer 1 takeover state makes normal interaction unavailable, Kivori MUST cancel the active normal gesture and surface the takeover without waiting for the gesture-end timer.
 37. **Recognized transient overlays do not own profiles by default.** A transient overlay shown over a stable foreground application SHOULD preserve the underlying application's profile unless the overlay becomes a normal independently focused context or is classified as Protected.
+38. **No ambiguous silence.** Whenever Kivori is powered and capable of rendering, user-relevant waiting, processing, restricted, transitional, failure, recovery, and update conditions MUST have an intentional visual representation rather than appearing frozen or accidentally blank.
+39. **Truthful activity beats fake progress.** When exact progress is not observable, Kivori SHOULD show indeterminate activity and state meaning rather than inventing a percentage or completion estimate.
+40. **Short press is release-qualified.** A normal short-press action becomes permanently ineligible once the initial MVP 500 ms hold cutoff is exceeded, preventing aborted recovery attempts from falling through into mapped click actions.
+41. **Composite actions report the composite outcome.** A multi-step macro MUST reflect the outcome of all required steps rather than reporting success because an earlier step succeeded.
+42. **Only observed hardware input is actionable.** Kivori MUST NOT reconstruct or invent rotary detents that the device did not actually observe.
+43. **Workspace transitions are non-profile-owning.** OS virtual-desktop/workspace switch surfaces SHOULD NOT own Kivori profiles; the resulting foreground app follows the normal stabilization/interaction-commit rules.
 
 ---
 
@@ -130,6 +136,19 @@ Example:
 
 The 5x ceiling limits runaway jumps during extreme high-speed continuous rotation while preserving useful coarse adjustment.
 
+### Observed detents only
+
+Kivori MUST apply only rotary detents that the hardware/firmware actually observes.
+
+If extremely fast manual rotation causes some physical detents not to be observed because of encoder bounce characteristics, electrical filtering, polling limits, or other hardware input limits:
+
+- missing/unobserved detents MUST NOT be reconstructed or guessed;
+- their absence MUST NOT be treated as an action failure by itself;
+- Kivori MUST NOT show Error merely because the user's physical motion may have exceeded what the encoder could report;
+- a hardware error MAY be shown only when the device has positive evidence of an actual hardware/input fault.
+
+The principle is: **missing input is not failed input.**
+
 ### Bounded values
 
 When a bounded action reaches its minimum or maximum:
@@ -156,6 +175,8 @@ Example:
 - [ ] Precision-oriented actions can disable acceleration.
 - [ ] MVP acceleration never exceeds 5x the action's base step.
 - [ ] Actions can choose a lower acceleration ceiling.
+- [ ] Unobserved/dropped detents are not invented or reconstructed.
+- [ ] High-speed detent loss does not produce Error without positive hardware-fault evidence.
 - [ ] Bounded controls clamp correctly.
 - [ ] Boundary feedback is not repeated for every excess tick.
 - [ ] Reverse movement exits boundary suppression immediately.
@@ -196,6 +217,23 @@ The action was dispatched but its final effect cannot be verified.
 Example: a keyboard macro is emitted but there is no reliable downstream completion signal.
 
 Kivori MUST NOT present Triggered / Unverified as confirmed success.
+
+### Composite/sequential actions
+
+A sequential macro or other multi-step action is one user-level composite action.
+
+If a composite action contains required steps:
+
+- all required steps that are verifiable MUST complete successfully before the overall action may be presented as Execution Confirmed/Success;
+- positive failure of any required step MUST make the overall action **Error / Partial Failure**, even if earlier steps succeeded;
+- if a later required step's result cannot be determined, the overall result MUST become **Unverified / Partial Outcome Unknown** rather than Success;
+- optional/non-required steps MAY be reported separately without changing the overall required-step outcome when their failure is explicitly non-fatal by configuration.
+
+Example:
+
+`Launch App -> Wait/Readiness step -> Send Keystroke`
+
+If the launch succeeds but the required readiness/send step is known to fail, the macro result is Error / Partial Failure, not Execution Confirmed.
 
 ### Initial interactive timing targets
 
@@ -249,6 +287,16 @@ Example:
 
 The reconnect itself MUST NOT fabricate an 800 ms Success transient for that five-minute-old completion.
 
+### Visual activity during unresolved work
+
+Whenever Kivori is capable of rendering and an action is meaningfully unresolved, the presentation MUST make the state intentional rather than appearing frozen.
+
+- ordinary delayed work MAY show Processing / Delayed after the relevant timing threshold;
+- long-running work SHOULD show a persistent Running/Busy presentation while current execution is known;
+- if trustworthy progress is available, Kivori MAY show progress;
+- if trustworthy progress is unavailable, Kivori SHOULD show indeterminate activity rather than a fabricated percentage;
+- known failure, Unverified, and Context Lost states SHOULD produce a distinct visual treatment instead of silently disappearing.
+
 ### Transient reaction targets
 
 Initial display targets:
@@ -289,6 +337,9 @@ Default transient priority is:
 
 - [ ] Local acknowledgement is distinguishable from action success.
 - [ ] State Confirmed, Execution Confirmed, and Unverified outcomes remain distinct.
+- [ ] Composite actions do not report Success solely because an early required step succeeded.
+- [ ] Known required-step failure becomes Error / Partial Failure.
+- [ ] Unknown required-step outcome becomes Unverified / Partial Outcome Unknown.
 - [ ] Timeout logic distinguishes known failure from unknown outcome.
 - [ ] A target app crash during a pending action becomes Error when the crash is known.
 - [ ] Missing callback without known failure becomes Unverified.
@@ -297,6 +348,8 @@ Default transient priority is:
 - [ ] Historical job completion does not generate a stale transient on reconnection.
 - [ ] A still-running job may restore current Running state after reconnection.
 - [ ] Unknown host-job outcome becomes Unverified rather than automatic failure or retry.
+- [ ] Unresolved/long-running work has an intentional active presentation when rendering is available.
+- [ ] Unknown progress is represented indeterminately rather than with invented percentages.
 - [ ] Transient reactions restore the underlying current state.
 - [ ] A newer deliberate interaction may truncate and replace an older interaction transient immediately.
 - [ ] Deliberate user-action transients do not form a mandatory visual queue.
@@ -336,6 +389,23 @@ Initial MVP rotary gesture-end target: **250 ms without a new rotary detent**.
 Until that inactivity threshold is reached, consecutive detents MAY be treated as one continuous rotary gesture.
 
 This gesture boundary is distinct from action semantics even if it initially shares the same 250 ms target as acceleration reset.
+
+### Button press/hold classification
+
+Normal short-press actions are **release-qualified** for MVP.
+
+Initial short-press hold cutoff: **500 ms**.
+
+- button release at or before the cutoff MAY execute the mapped short-press action when the current context otherwise permits it;
+- once key-down exceeds the cutoff, the normal short-press action becomes permanently suppressed for that hold;
+- releasing after the cutoff but before the recovery threshold MUST NOT execute the mapped short-press action;
+- reaching the recovery threshold follows US10's MCU recovery behavior.
+
+Example:
+
+`button down -> held 9 s -> released before 10 s -> no mapped click action`
+
+The cutoff is an MVP input-classification rule and SHOULD NOT be user-configurable by profile in MVP.
 
 ### Gesture context ownership
 
@@ -420,6 +490,9 @@ For a currently active continuous gesture, the system MAY retain the latest targ
 - [ ] Rapid rotary use does not require one full confirmation round trip per tick.
 - [ ] Final display reconciles against confirmed state.
 - [ ] 250 ms without a detent ends a rotary gesture for the initial MVP target.
+- [ ] A short press is eligible only when released within the initial 500 ms cutoff.
+- [ ] A hold exceeding 500 ms cannot fall through into a normal mapped click on release.
+- [ ] Aborted recovery holds do not execute the normal click action.
 - [ ] Focus change mid-gesture does not split one gesture across profiles.
 - [ ] Known target loss mid-gesture cancels the remaining stream.
 - [ ] Remaining detents after target loss are ignored until that gesture ends.
@@ -489,6 +562,18 @@ Initial passive focus-stabilization target: **300-500 ms** before committing to 
 Momentary overlays and brief focus theft SHOULD NOT produce visible profile thrashing.
 
 Transient system overlays MAY be classified as non-profile-owning contexts.
+
+### Virtual desktop/workspace transitions
+
+OS virtual-desktop/workspace switch surfaces such as Windows Task View or macOS Spaces transition UI SHOULD be non-profile-owning.
+
+During the transition:
+
+- the transition surface SHOULD NOT become a normal application profile;
+- the previously committed app profile MAY remain presentation context until the switch resolves, but new app-scoped execution MUST follow the current valid foreground context rules;
+- after the switch completes, the newly visible/focused app enters the normal **300-500 ms** passive stabilization window;
+- if the user deliberately interacts with Kivori during that window, the pending newly focused app MUST commit immediately under the normal interaction-commit rule;
+- General MUST NOT be used merely as an intermediate profile because a workspace animation is occurring.
 
 ### Transient in-app and game overlays
 
@@ -590,6 +675,9 @@ MVP operation is scoped to the user's normal interactive session rather than req
 - [ ] Mouse hover does not switch profiles.
 - [ ] Passive focus changes require stable OS focus before visible profile commitment.
 - [ ] Very brief focus theft does not produce a committed profile swap.
+- [ ] Virtual-desktop/workspace transition UI does not own a normal app profile.
+- [ ] Newly visible app after workspace switch uses normal stabilization.
+- [ ] Deliberate Kivori input during workspace-switch stabilization commits the pending app immediately.
 - [ ] Recognized transient in-game overlays preserve the underlying game profile by default.
 - [ ] Overlay handling does not require process injection or anti-cheat hooks solely for profile ownership.
 - [ ] A persistent independently focused overlay/application may enter normal focus stabilization.
@@ -634,6 +722,8 @@ During protected contexts for MVP:
 
 Protected/secure context classification MUST occur before any General-profile fallback.
 
+When rendering is available, Protected and Permission Required states MUST have an intentional visual treatment; they MUST NOT look like a frozen normal buddy or unexplained blank screen.
+
 ### Permission restrictions
 
 If Kivori Desktop remains connected while a capability permission is missing:
@@ -656,6 +746,7 @@ Permission failure MUST remain conceptually distinct from connection failure.
 - [ ] Blocked actions do not silently fall back to another mechanism.
 - [ ] Repeated blocked actions are not spam-retried without state change.
 - [ ] Protected context does not disable the hardware MCU recovery gesture.
+- [ ] Protected/Permission Required presentation is visibly intentional when rendering is available.
 
 ---
 
@@ -668,6 +759,39 @@ Permission failure MUST remain conceptually distinct from connection failure.
 ## Contract
 
 Kivori uses four visual layers.
+
+### Intentional visual feedback standard
+
+When Kivori is powered and the renderer is available, every user-relevant state that could otherwise be mistaken for a frozen device MUST have an intentional presentation.
+
+This includes, at minimum:
+
+- Waiting;
+- Host Starting / Resuming;
+- Switching User;
+- Reconnecting;
+- Disconnected;
+- Degraded system health;
+- Protected;
+- Permission Required;
+- Firmware Updating;
+- Processing / Delayed;
+- Running / Busy;
+- Error / Failed;
+- Triggered / Unverified;
+- Context Lost / cancelled action where feedback is useful;
+- Passive / Unassigned;
+- active hardware recovery hold.
+
+The presentation MAY combine buddy pose/expression, iconography, text, motion, progress treatment, or other visual language appropriate to the hardware.
+
+**Motion communicates activity; state treatment communicates meaning.**
+
+Kivori MUST NOT use fabricated progress values. When progress is not trustworthy, use indeterminate activity.
+
+A static presentation is acceptable when static is semantically appropriate, but it MUST still make the state understandable rather than looking like a stale frame.
+
+Deliberate Display Sleep is exempt because blanking is itself the intended state. Low-level conditions where normal rendering is technically unavailable are also exempt from the normal-renderer requirement, but any reliable fallback indication SHOULD be used where available.
 
 ## Layer 1 — Takeover State
 
@@ -720,14 +844,19 @@ Initial startup/resume grace target: **15-30 seconds**.
 
 During this grace state, absence of the user's Kivori session MUST NOT immediately be presented as an unexpected disconnect.
 
+When rendering is available, Host Starting / Resuming SHOULD visibly communicate that Kivori is waiting for the host session rather than appearing idle or frozen.
+
 ### Firmware Updating
 
 Firmware update MUST be represented as an intentional state rather than an unexplained crash.
 
-If full rendering is unavailable during low-level update, Kivori MAY use:
+While the normal renderer remains available:
 
-- a minimal hardware-supported indication; or
-- a temporarily blank display while desktop software presents update progress where possible.
+- Firmware Updating SHOULD use a clear update/activity presentation;
+- trustworthy progress MAY be shown when available;
+- if exact progress is not trustworthy, Kivori SHOULD use indeterminate update activity rather than inventing a percentage.
+
+If full rendering becomes unavailable during low-level update, Kivori SHOULD use the simplest reliable hardware-supported indication available. A temporarily blank display is acceptable only when the normal renderer and any other reliable device indication are genuinely unavailable; Kivori Desktop SHOULD present update state/progress where possible.
 
 ## Layer 2 — System Health
 
@@ -736,6 +865,7 @@ System health describes trustworthiness of current communication/state freshness
 - Healthy does not need permanent visual real estate.
 - Degraded SHOULD receive dedicated visual priority.
 - Degraded MUST NOT consume an ordinary secondary-indicator slot.
+- Degraded SHOULD have an intentional visible cue when active rather than silently looking Healthy.
 
 ## Layer 3 — Primary Buddy State
 
@@ -804,6 +934,9 @@ Active profile information SHOULD normally appear transiently after a profile ch
 ## Acceptance Criteria
 
 - [ ] Takeover states cannot be confused with normal buddy state.
+- [ ] User-relevant waiting/processing/recovery/restriction/failure states do not appear accidentally frozen when rendering is available.
+- [ ] Unknown progress uses indeterminate activity rather than fabricated percentages.
+- [ ] Display Sleep is clearly the deliberate blank-state exception.
 - [ ] Layer 1 takeover becomes visible immediately when normal interaction becomes unavailable.
 - [ ] An active rotary gesture does not delay Reconnecting/Disconnected takeover presentation.
 - [ ] Degraded health has distinct visual allocation from secondary indicators.
@@ -811,7 +944,7 @@ Active profile information SHOULD normally appear transiently after a profile ch
 - [ ] Passive displays do not mirror ordinary desktop status in MVP.
 - [ ] Passive assignment does not disable MCU recovery.
 - [ ] Fast User Switching does not unnecessarily flash through Waiting.
-- [ ] Firmware update does not look like an unexplained disconnect.
+- [ ] Firmware update does not look like an unexplained disconnect or frozen screen when any reliable indication is available.
 - [ ] Mic and other protected system/privacy indicators cannot be displaced by custom app indicators.
 - [ ] A newly active higher-priority indicator can preempt immediately.
 - [ ] Lower-priority indicator promotion waits for the stabilization window before causing layout reflow.
@@ -848,6 +981,8 @@ Permission-limited capability SHOULD likewise remain localized unless the restri
 
 For long-running execution, device-link uncertainty MUST NOT automatically propagate into job-failure state when the desktop host still has reliable job status.
 
+When uncertainty is user-relevant and rendering is available, the uncertain state SHOULD be visually explicit rather than silently omitted when omission would make the device appear stale or misleading.
+
 ## Acceptance Criteria
 
 - [ ] One unknown secondary state does not force whole-device Unknown.
@@ -855,6 +990,7 @@ For long-running execution, device-link uncertainty MUST NOT automatically propa
 - [ ] Whole-buddy Unknown is reserved for primary-state uncertainty.
 - [ ] Permission/capability loss follows the same localization principle.
 - [ ] Device-link degradation does not falsely convert known-running host work into Error.
+- [ ] User-relevant uncertainty does not masquerade as a frozen/stale known state.
 
 ---
 
@@ -911,6 +1047,14 @@ Burn-in/glare protection MAY include:
 - pixel repositioning;
 - eventual complete display blanking.
 
+### Ambient progression timing
+
+The transitions into Dim, Low Motion, and Display Sleep SHOULD be independently configurable in Kivori Desktop for MVP.
+
+Firmware/device logic MAY enforce hardware-safe minimum/maximum bounds so a user cannot configure values that meaningfully compromise panel/device safety.
+
+The timings SHOULD therefore be preferences within a safe operating envelope rather than immutable firmware-only constants.
+
 ### Display wake semantics
 
 When Kivori is fully in Display Sleep:
@@ -934,6 +1078,8 @@ Examples:
 - after the wake gesture ends, the next new gesture MAY execute normally.
 
 When Kivori is merely Dim or Low Motion, the interaction SHOULD execute normally while restoring full presentation.
+
+Display Sleep is an intentional presentation-only blanking state. Normal Waiting, Processing, Reconnecting, Protected, Error, or recovery conditions MUST NOT use unexplained blank output when normal rendering is available.
 
 ### Explicit desktop configuration test commands
 
@@ -990,7 +1136,9 @@ Urgent wake classification SHOULD be narrow and deterministic. It MUST NOT becom
 - [ ] App-specific audio remains explicitly scoped.
 - [ ] Background buzzer feedback respects DND by default.
 - [ ] Monitor blanking does not become Sleeping or Disconnected by itself.
+- [ ] Dim, Low Motion, and Display Sleep timings are independently configurable within hardware-safe bounds.
 - [ ] Display Sleep can fully blank the panel.
+- [ ] Display Sleep is not confused with an unexplained blank normal state.
 - [ ] A wake gesture that starts while asleep is swallowed in its entirety.
 - [ ] A multi-tick rotary wake gesture does not partially execute desktop actions.
 - [ ] Continuous rotary wake input remains wake-only until 250 ms of rotary inactivity ends the gesture.
@@ -1031,6 +1179,8 @@ Examples:
 - current OS user has no Kivori session.
 
 Waiting MUST NOT silently become a driverless macro mode.
+
+When rendering is available, Waiting SHOULD have a calm intentional waiting presentation rather than a stale/frozen last-known desktop frame.
 
 ### Passive / Unassigned
 
@@ -1077,6 +1227,8 @@ Reconnection MUST restore current observable state rather than replaying expired
 
 If Reconnecting becomes known during an active ordinary gesture, Reconnecting takeover MUST surface immediately and the active gesture MUST be cancelled according to US3 rather than waiting for gesture-end inactivity.
 
+When rendering is available, Reconnecting SHOULD visibly communicate ongoing reconnection activity rather than remaining on a frozen prior state.
+
 For host-side jobs:
 
 - a currently running job MAY restore a Running representation after reconnect;
@@ -1107,6 +1259,8 @@ Disconnected describes device/session communication, not necessarily the lifetim
 If Disconnected becomes known during an active ordinary gesture, the gesture MUST be cancelled and Disconnected takeover MUST render immediately; Kivori MUST NOT wait for the 250 ms gesture-end inactivity threshold.
 
 If Kivori later reconnects while the desktop service can still observe that process/job, current execution state MUST be reconciled without reissuing the original command or replaying expired historical transients.
+
+When rendering is available, Disconnected MUST have a clear intentional presentation and MUST NOT leave the previous active desktop state frozen on screen as though it were still current.
 
 ### Sleeping / Locked
 
@@ -1140,6 +1294,16 @@ While the primary recovery-capable button remains continuously depressed and the
 
 This recovery arbitration takes precedence over the ordinary single-gesture rule because recovery is an escape path rather than a normal configurable input gesture.
 
+### Recovery hold presentation
+
+When the renderer is available and the recovery-capable hold has crossed the short-press cutoff:
+
+- Kivori SHOULD visibly communicate that a recovery hold is active;
+- because the recovery threshold itself is deterministic, Kivori MAY show truthful elapsed/remaining hold progress such as a ring or countdown toward reboot;
+- releasing before the recovery threshold SHOULD visibly return to the appropriate underlying device/desktop state without executing the mapped click action;
+- reaching the threshold SHOULD transition into an explicit Rebooting/recovery indication when possible before/reset as the MCU restarts;
+- recovery MUST NOT look like an unexplained ten-second freeze.
+
 When the recovery-capable button is pressed from Display Sleep:
 
 - the display SHOULD wake immediately at key-down;
@@ -1147,6 +1311,12 @@ When the recovery-capable button is pressed from Display Sleep:
 - waking the display MUST NOT reset or cancel the recovery hold timer;
 - reaching the recovery threshold MUST reboot the MCU;
 - releasing before the threshold MUST NOT retroactively execute the normal mapped button action.
+
+When the button is pressed while already awake/Connected:
+
+- a release within the initial 500 ms short-press window MAY execute the mapped short-press action;
+- once the hold exceeds 500 ms, mapped short-press execution is permanently suppressed for that hold;
+- releasing after 500 ms but before the ~10 s recovery threshold results in no mapped desktop action.
 
 Factory reset MUST use a separate, harder-to-trigger mechanism.
 
@@ -1164,12 +1334,15 @@ If firmware is so compromised that it cannot observe the recovery gesture, this 
 - [ ] Reconnection reconciles current host execution without replaying its start command.
 - [ ] Reconnection does not replay stale completion transients for historical host jobs.
 - [ ] Reconnecting/Disconnected takeover preempts and cancels active normal gestures immediately.
+- [ ] Waiting/Reconnecting/Disconnected look intentional rather than frozen when rendering is available.
 - [ ] Recovery gesture works without desktop communication.
 - [ ] Recovery remains available in Passive state.
 - [ ] Recovery remains available during Protected/restricted desktop contexts.
 - [ ] Recovery remains available in Display Sleep and wakes the display immediately on key-down.
 - [ ] Display wake does not interrupt the recovery hold timer.
 - [ ] Rotary detents during a push-encoder recovery hold do not cancel/reset recovery or execute normal rotary mappings.
+- [ ] Recovery hold provides visible in-progress feedback when rendering is available.
+- [ ] A 9-second hold released before recovery does not execute the mapped short-press action.
 - [ ] Early release of a recovery-capable wake press does not execute the mapped button action.
 - [ ] Recovery does not erase configuration.
 - [ ] Factory reset is not accidentally triggered by the ordinary recovery gesture.
@@ -1200,7 +1373,9 @@ Kivori Desktop SHOULD provide configuration for:
 - visual feedback;
 - buzzer feedback;
 - Do Not Disturb behavior;
-- ambient/display-sleep timing;
+- Normal-to-Dim timing;
+- Dim-to-Low-Motion timing;
+- Low-Motion-to-Display-Sleep timing;
 - configurable display-wake sources where supported;
 - custom indicator visibility/order within the allowed custom tier;
 - buddy-state preview;
@@ -1209,6 +1384,8 @@ Kivori Desktop SHOULD provide configuration for:
 - configuration reset.
 
 The desktop configuration window MUST NOT need to remain visible for ordinary background operation.
+
+Ambient timing controls MAY be constrained by hardware-safe minimum/maximum values. The UI SHOULD make such limits clear rather than silently ignoring invalid timing choices.
 
 ### Explicit test and preview behavior
 
@@ -1270,6 +1447,7 @@ Future multi-device roles MAY be introduced only through explicit assignment sem
 - [ ] Passive devices do not execute ordinary mappings.
 - [ ] Passive devices do not mirror ordinary desktop state.
 - [ ] Passive devices retain hardware recovery.
+- [ ] Normal-to-Dim, Dim-to-Low-Motion, and Low-Motion-to-Display-Sleep timings are independently configurable within safe limits.
 - [ ] Preview Buddy State can explicitly wake a selected sleeping device without executing a mapped action.
 - [ ] Test Action can explicitly wake a selected sleeping device when testing is otherwise permitted.
 - [ ] Test/preview commands do not bypass Protected/permission/connection/assignment restrictions.
@@ -1301,6 +1479,7 @@ Future multi-device roles MAY be introduced only through explicit assignment sem
 | Behavior | Initial target |
 | --- | ---: |
 | Local input acknowledgement | < 50 ms |
+| Short-press maximum hold | 500 ms |
 | Delayed/processing indication | ~500 ms |
 | Ordinary interactive unresolved timeout | ~1,500 ms |
 | Success transient | ~800 ms |
@@ -1327,6 +1506,8 @@ A rotary wake gesture remains one wake-only gesture until the 250 ms rotary gest
 
 Lower-priority secondary indicators use an initial ~250 ms promotion-stabilization target; higher-priority escalation is not delayed by that timer.
 
+Once a button hold exceeds the initial 500 ms short-press cutoff, normal mapped short-press execution remains suppressed for the rest of that hold, even if recovery is later aborted before ~10 s.
+
 # 6. Default Priority References
 
 ## Transient Reaction Priority
@@ -1351,6 +1532,19 @@ Custom indicator settings MAY reorder or hide indicators within the custom tier 
 
 Priority escalation SHOULD appear immediately. When a higher-priority indicator disappears and exposes a lower-priority indicator, lower-priority promotion SHOULD use the initial ~250 ms stabilization window before reflowing the layout.
 
+## Visual Feedback Priority
+
+When rendering is available, the product SHOULD preserve this presentation intent:
+
+1. safety/privacy/urgent state;
+2. Layer 1 takeover/recovery state;
+3. active user interaction or running action feedback;
+4. system-health indication;
+5. primary buddy state;
+6. secondary indicators.
+
+This priority does not authorize false progress or hidden state mutation; it only governs which truthful information gets visual precedence.
+
 # 7. MVP Boundaries
 
 The following are explicitly outside this contract's MVP guarantees:
@@ -1362,6 +1556,9 @@ The following are explicitly outside this contract's MVP guarantees:
 - automatic inference of ambiguous sub-app identity;
 - implicit simultaneous-input chords;
 - acceleration above 5x the configured action base step;
+- reconstructing rotary detents the hardware did not observe;
+- profile ownership by virtual-desktop/workspace transition UI;
+- user-configurable short-press cutoff in MVP;
 - replaying physical input after communication recovery;
 - delaying Reconnecting/Disconnected takeover presentation until an active rotary gesture naturally ends;
 - replaying historical Success/Error presentation transients after reconnection;
@@ -1375,7 +1572,8 @@ The following are explicitly outside this contract's MVP guarantees:
 - host wake-from-Kivori;
 - visibility into physical device states that are not exposed through a trustworthy signal;
 - fully user-defined priority that can demote system/privacy indicators below custom app indicators;
-- forensic guarantees about erasing every historical RAM byte during local OS-user switching, beyond the requirement that previous-user session state becomes non-renderable and non-reusable.
+- forensic guarantees about erasing every historical RAM byte during local OS-user switching, beyond the requirement that previous-user session state becomes non-renderable and non-reusable;
+- fabricated progress percentages when trustworthy progress is unavailable.
 
 # 8. Change Control
 
