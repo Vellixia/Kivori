@@ -36,24 +36,28 @@ The following rules apply across all user stories.
 8. **Interaction commits intent.** If a pending foreground application is valid but still inside the focus-stabilization window, deliberate Kivori interaction MUST commit that foreground application before dispatching the action.
 9. **Security context beats profile fallback.** Protected/secure foreground context MUST be classified before profile commitment and MUST NOT fall back to General merely because normal app actions are unavailable.
 10. **Dispatch target is revalidated.** A gesture MUST NOT be silently retargeted if its committed application disappears between input registration and action dispatch.
-11. **Gesture ownership.** A physical gesture remains bound to the context in which it began.
-12. **One gesture owns input in MVP.** Simultaneous inputs MUST NOT implicitly become combo triggers.
-13. **Wake gestures are atomic.** A gesture that begins while the display is fully asleep MUST be consumed as wake-only in its entirety.
-14. **Rotary reversal resets acceleration.** A direction reversal MUST restart rotary acceleration at baseline before acceleration may build again in the new direction.
-15. **User isolation.** One OS user's mappings and session-specific presentation MUST NOT remain visible or actionable in another user's session.
-16. **Session-private render state becomes non-renderable on ownership change.** Previous-user app/profile names, custom icons, transient feedback, and user-specific indicators MUST be invalidated before another local OS user can see them.
-17. **No hidden fallback.** If an action cannot run in the current context, Kivori MUST communicate unavailability rather than silently switch mechanisms.
-18. **Localized uncertainty.** Unknown/restricted state SHOULD propagate only as far as necessary.
-19. **Known host/session state wins.** Explicit sleep, lock, switching-user, update, or restart state outranks generic communication symptoms.
-20. **Passive is not Waiting.** Passive means a usable desktop exists but this device is not assigned as the controller.
-21. **Passive is not Monitor Mode.** Passive devices MUST NOT mirror ordinary real-time desktop state in MVP.
-22. **Hardware recovery is out-of-band.** Basic MCU recovery MUST remain available independently of desktop software, profile assignment, and normal action restrictions whenever firmware can still observe the recovery gesture.
-23. **Latest deliberate interaction wins transient feedback.** A newer deliberate user action MAY replace an older interaction transient immediately; user-action transients MUST NOT form a mandatory visual queue.
-24. **Interaction feedback has priority over ordinary background transients.** Ordinary unsolicited reactions SHOULD NOT interrupt active user-action feedback.
-25. **Urgent state may wake the display.** A small defined class of immediate-attention desktop states MAY wake Display Sleep; ordinary background changes MUST NOT.
-26. **System/privacy indicators outrank custom indicators.** User customization MUST NOT allow app-specific indicators to displace higher-priority safety/privacy state.
-27. **Continuous gestures reconcile at gesture boundaries.** External continuous-value updates SHOULD NOT visually fight an active Kivori rotary gesture; final confirmed state MUST reconcile when the gesture ends.
-28. **Execution health is separate from transport health.** A confirmed host-side long-running operation MUST NOT be considered failed solely because the Kivori device link becomes Degraded or Disconnected.
+11. **Known target loss cancels the gesture.** If a committed application target is known to disappear during a continuous gesture, the remaining gesture input MUST be discarded until that gesture ends.
+12. **Gesture ownership.** A physical gesture remains bound to the context in which it began.
+13. **One gesture owns input in MVP.** Simultaneous inputs MUST NOT implicitly become combo triggers.
+14. **Wake gestures are atomic.** A gesture that begins while the display is fully asleep MUST be consumed as wake-only in its entirety.
+15. **Rotary reversal resets acceleration.** A direction reversal MUST restart rotary acceleration at baseline before acceleration may build again in the new direction.
+16. **Acceleration represents sustained direction.** Acceleration MUST accumulate only across consecutive same-direction detents; rapid oscillation repeatedly resets to baseline.
+17. **User isolation.** One OS user's mappings and session-specific presentation MUST NOT remain visible or actionable in another user's session.
+18. **Session-private render state becomes non-renderable on ownership change.** Previous-user app/profile names, custom icons, transient feedback, and user-specific indicators MUST be invalidated before another local OS user can see them.
+19. **No hidden fallback.** If an action cannot run in the current context, Kivori MUST communicate unavailability rather than silently switch mechanisms.
+20. **Localized uncertainty.** Unknown/restricted state SHOULD propagate only as far as necessary.
+21. **Known host/session state wins.** Explicit sleep, lock, switching-user, update, or restart state outranks generic communication symptoms.
+22. **Passive is not Waiting.** Passive means a usable desktop exists but this device is not assigned as the controller.
+23. **Passive is not Monitor Mode.** Passive devices MUST NOT mirror ordinary real-time desktop state in MVP.
+24. **Hardware recovery is out-of-band.** Basic MCU recovery MUST remain available independently of desktop software, profile assignment, display-sleep state, and normal action restrictions whenever firmware can still observe the recovery gesture.
+25. **Latest deliberate interaction wins transient feedback.** A newer deliberate user action MAY replace an older interaction transient immediately; user-action transients MUST NOT form a mandatory visual queue.
+26. **Interaction feedback has priority over ordinary background transients.** Ordinary unsolicited reactions SHOULD NOT interrupt active user-action feedback.
+27. **Urgent state may wake the display.** A small defined class of immediate-attention desktop states MAY wake Display Sleep; ordinary background changes MUST NOT.
+28. **System/privacy indicators outrank custom indicators.** User customization MUST NOT allow app-specific indicators to displace higher-priority safety/privacy state.
+29. **Indicator escalation is immediate; promotion is stabilized.** A newly active higher-priority indicator SHOULD appear immediately, while newly exposed lower-priority indicators SHOULD wait for a short stabilization window before causing layout reflow.
+30. **Continuous gestures reconcile at gesture boundaries.** External continuous-value updates SHOULD NOT visually fight an active Kivori rotary gesture; final confirmed state MUST reconcile when the gesture ends.
+31. **Execution health is separate from transport health.** A confirmed host-side long-running operation MUST NOT be considered failed solely because the Kivori device link becomes Degraded or Disconnected.
+32. **Reconnection restores current truth, not expired presentation.** Reconnecting MUST NOT replay stale Success/Error/Unverified transients for historical events that completed while the device was disconnected.
 
 ---
 
@@ -94,13 +98,15 @@ Initial default acceleration-reset target: **250 ms without a new detent -> rese
 
 Acceleration MUST be action-specific and MAY be disabled for precision-oriented actions.
 
-A rotary direction reversal MUST reset the acceleration multiplier to baseline before applying the first detent in the new direction.
+Acceleration MUST build only from consecutive detents in the same direction. Every direction reversal MUST reset the multiplier to baseline before the first detent in the new direction is applied.
 
 Example:
 
-`rapid clockwise rotation at 5x -> maximum reached -> first counter-clockwise detent -> one baseline reverse step`
+`CW 1x -> CW 2x -> CW 3x -> reverse -> CCW 1x -> CCW 2x -> reverse -> CW 1x`
 
-Acceleration MAY then build again from baseline if the user continues rotating rapidly in the new direction.
+Rapid one-detent oscillation therefore remains effectively at baseline sensitivity. This is intentional: sustained direction expresses speed intent, while repeated reversal expresses precision intent.
+
+For actions such as frame-accurate or fine audio scrubbing, acceleration MAY be disabled entirely.
 
 ### Bounded values
 
@@ -122,6 +128,10 @@ Example:
 - [ ] Assigned actions expose explicit action identity/scope.
 - [ ] App profiles select actions without mutating action meaning.
 - [ ] Rotary actions can define action-specific sensitivity and acceleration.
+- [ ] Acceleration accumulates only across same-direction detents.
+- [ ] Every direction flip resets acceleration to 1x.
+- [ ] Rapid oscillation remains effectively baseline unless multiple same-direction detents accumulate.
+- [ ] Precision-oriented actions can disable acceleration.
 - [ ] Bounded controls clamp correctly.
 - [ ] Boundary feedback is not repeated for every excess tick.
 - [ ] Reverse movement exits boundary suppression immediately.
@@ -198,6 +208,23 @@ If the desktop service itself loses the ability to determine whether the job com
 
 A lost or uncertain execution MUST NOT be automatically restarted merely because the Kivori link later recovers.
 
+### Reconnection and historical completion
+
+Reconnection is a current-state reconciliation event, not a replay of missed presentation events.
+
+If a previously known long-running action completed while Kivori was disconnected:
+
+- Kivori MUST NOT replay an expired Success, Error, or Unverified transient merely because transport reconnects;
+- if the job is still running, current Running state MAY be restored;
+- if the job completed in the past and no current running state remains, Kivori SHOULD settle directly into the current underlying buddy state;
+- historical completion MAY remain available in desktop-side history/logging without occupying the live transient surface.
+
+Example:
+
+`Build starts -> Kivori disconnects -> build succeeds -> five minutes later reconnect -> current state Idle`
+
+The reconnect itself MUST NOT fabricate an 800 ms Success transient for that five-minute-old completion.
+
 ### Transient reaction targets
 
 Initial display targets:
@@ -243,6 +270,8 @@ Default transient priority is:
 - [ ] Missing callback without known failure becomes Unverified.
 - [ ] Confirmed long-running host execution is not failed solely because the device link degrades.
 - [ ] Reconnection reconciles long-running job state without replaying the start command.
+- [ ] Historical job completion does not generate a stale transient on reconnection.
+- [ ] A still-running job may restore current Running state after reconnection.
 - [ ] Unknown host-job outcome becomes Unverified rather than automatic failure or retry.
 - [ ] Transient reactions restore the underlying current state.
 - [ ] A newer deliberate interaction may truncate and replace an older interaction transient immediately.
@@ -290,6 +319,23 @@ A gesture MUST remain attached to the profile/context that was committed when th
 
 If application focus changes during a rotary burst, the current rotary burst MUST continue using its starting context. The newly focused profile becomes eligible for the next gesture.
 
+### Continuous gesture target loss
+
+If the committed target application/window is known to close, crash, or otherwise become invalid while a continuous gesture is active:
+
+- any detents already dispatched remain historical and MUST NOT be replayed or undone automatically;
+- the current gesture MUST be marked cancelled for application-scoped execution;
+- all later detents belonging to that same gesture MUST be ignored for desktop execution;
+- later detents MUST NOT independently retarget to General, the previous app, or the app that gains focus next;
+- Kivori SHOULD surface **Error / Context Lost** once for the cancelled gesture rather than producing an error per ignored detent;
+- a new application context may become eligible only after the cancelled gesture ends and a new gesture begins.
+
+Example:
+
+`VS Code gesture -> detents 1-3 execute -> VS Code exits -> Context Lost -> detents 4-10 ignored -> gesture ends -> next new gesture may bind to new context`
+
+This preserves the invariant that one physical gesture has one context.
+
 ### Mid-gesture desktop state changes
 
 For a continuous value that is actively controlled by a Kivori rotary gesture, an external desktop update to that same continuous value SHOULD NOT immediately overwrite the local in-progress preview.
@@ -334,6 +380,10 @@ For a currently active continuous gesture, the system MAY retain the latest targ
 - [ ] Final display reconciles against confirmed state.
 - [ ] 250 ms without a detent ends a rotary gesture for the initial MVP target.
 - [ ] Focus change mid-gesture does not split one gesture across profiles.
+- [ ] Known target loss mid-gesture cancels the remaining stream.
+- [ ] Remaining detents after target loss are ignored until that gesture ends.
+- [ ] Target loss does not cause per-detent retargeting to another application.
+- [ ] Context Lost feedback is not spammed once per ignored detent.
 - [ ] External updates do not visually fight the same continuous value during an active gesture.
 - [ ] Important discrete state changes may still surface during a continuous gesture.
 - [ ] Implicit chord actions are not produced in MVP.
@@ -432,6 +482,8 @@ If the committed target application/window terminates before dispatch and that l
 
 If target validity cannot be determined reliably, the action follows the normal Unverified rules rather than guessing.
 
+If a target becomes invalid after a continuous gesture has already begun, US3's gesture-level cancellation rule applies: the remaining gesture stream is discarded until gesture end rather than revalidating and retargeting every later detent independently.
+
 ### Foreground/background rule
 
 The committed foreground application owns app-specific physical mappings.
@@ -481,6 +533,7 @@ MVP operation is scoped to the user's normal interactive session rather than req
 - [ ] A pending Protected context enters Protected behavior immediately rather than falling back to General.
 - [ ] The previous app profile is not used for a new gesture merely because the stabilization timer is still running.
 - [ ] An app that disappears before dispatch does not cause the gesture to be silently retargeted.
+- [ ] An app that disappears mid-gesture cancels the remaining gesture stream.
 - [ ] Known target loss is surfaced as known failure/Context Lost.
 - [ ] Background apps do not take physical control ownership.
 - [ ] Generic-host sub-app behavior is explicit rather than guessed.
@@ -652,6 +705,31 @@ Users MAY configure ordering/visibility within the custom app-specific tier, and
 
 When the visible indicator budget is exceeded, lower-priority indicators SHOULD be condensed or hidden rather than shrinking all content indefinitely.
 
+### Indicator layout stabilization
+
+Indicator priority and layout stabilization use asymmetric behavior.
+
+When a newly active indicator has higher priority than something currently visible:
+
+- it SHOULD claim the required indicator slot immediately;
+- Kivori SHOULD NOT delay urgent/high-priority information merely to preserve layout stability.
+
+When a higher-priority indicator disappears and exposes a previously hidden lower-priority indicator:
+
+- the lower-priority promotion SHOULD wait for an initial **~250 ms stable period** before reflowing the layout;
+- multiple lower-priority changes during that window SHOULD be batched into one resulting layout update;
+- if another higher-priority state appears during the stabilization window, the pending lower-priority promotion SHOULD be recalculated or cancelled.
+
+Example with two visible slots:
+
+`[Mic] [Call] -> Call ends -> hold current layout transition for ~250 ms -> [Mic] [Audio Mute]`
+
+If another higher-priority indicator becomes active during that ~250 ms period, it may preempt immediately instead of waiting.
+
+The product principle is:
+
+**Priority escalation is immediate; lower-priority promotion is stabilized.**
+
 Active profile information SHOULD normally appear transiently after a profile change rather than occupy a permanent indicator slot.
 
 ## Acceptance Criteria
@@ -664,6 +742,9 @@ Active profile information SHOULD normally appear transiently after a profile ch
 - [ ] Fast User Switching does not unnecessarily flash through Waiting.
 - [ ] Firmware update does not look like an unexplained disconnect.
 - [ ] Mic and other protected system/privacy indicators cannot be displaced by custom app indicators.
+- [ ] A newly active higher-priority indicator can preempt immediately.
+- [ ] Lower-priority indicator promotion waits for the stabilization window before causing layout reflow.
+- [ ] Multiple changes during the promotion window are batched when practical.
 - [ ] Secondary-state overload is handled through fixed baseline priority plus condensation/hiding.
 
 ---
@@ -783,6 +864,26 @@ Examples:
 
 When Kivori is merely Dim or Low Motion, the interaction SHOULD execute normally while restoring full presentation.
 
+### Display Sleep and hardware recovery hold
+
+The hardware recovery detector is out-of-band from ordinary desktop button-action handling.
+
+If the primary hardware button is pressed while Kivori is fully in Display Sleep:
+
+- key-down SHOULD wake the display immediately so the device visibly acknowledges the interaction;
+- the ordinary configured button action MUST remain suppressed because the gesture began as a wake gesture;
+- the hardware recovery hold timer MUST continue running independently after the display wakes;
+- if the button remains held for the recovery threshold, the MCU MUST reboot according to US10;
+- if the user releases before the recovery threshold, the display remains awake and no ordinary desktop action from that press is executed.
+
+Example:
+
+`Display Sleep -> button down -> display wakes -> normal action suppressed -> hold reaches ~10 s -> MCU reboot`
+
+Early release example:
+
+`Display Sleep -> button down -> display wakes -> release at 4 s -> no desktop action`
+
 ### Urgent desktop wake events
 
 A small explicit class of immediate-attention desktop states MAY wake Display Sleep without physical interaction.
@@ -806,6 +907,9 @@ Urgent wake classification SHOULD be narrow and deterministic. It MUST NOT becom
 - [ ] A wake gesture that starts while asleep is swallowed in its entirety.
 - [ ] A multi-tick rotary wake gesture does not partially execute desktop actions.
 - [ ] Continuous rotary wake input remains wake-only until 250 ms of rotary inactivity ends the gesture.
+- [ ] A recovery-button key-down wakes the display immediately from Display Sleep.
+- [ ] Waking the display does not cancel the recovery hold timer.
+- [ ] Releasing a recovery-capable wake press before ~10 s does not execute the ordinary mapped button action.
 - [ ] Passive incidental events do not wake Display Sleep by default.
 - [ ] Narrowly defined urgent desktop states may wake the display.
 - [ ] Ordinary background state changes do not wake Display Sleep.
@@ -878,6 +982,15 @@ The desktop service is intentionally restarting, for example during a software u
 
 Actions MUST NOT be buffered for execution after Reconnecting completes.
 
+Reconnection MUST restore current observable state rather than replaying expired UI feedback from events that occurred while disconnected.
+
+For host-side jobs:
+
+- a currently running job MAY restore a Running representation after reconnect;
+- a job that completed in the past MUST NOT cause a stale Success/Error transient merely because the device reconnected;
+- historical results MAY remain available in desktop-side logs/history;
+- the original job command MUST NOT be reissued on reconnect.
+
 ### Degraded
 
 Communication remains partially alive but is late/unhealthy.
@@ -898,7 +1011,7 @@ Examples:
 
 Disconnected describes device/session communication, not necessarily the lifetime of a host-side process that was already confirmed started.
 
-If Kivori later reconnects while the desktop service can still observe that process/job, current execution state MUST be reconciled without reissuing the original command.
+If Kivori later reconnects while the desktop service can still observe that process/job, current execution state MUST be reconciled without reissuing the original command or replaying expired historical transients.
 
 ### Sleeping / Locked
 
@@ -920,7 +1033,16 @@ Recovery MUST:
 - remain available when the host PC is frozen or unavailable, provided firmware can still observe the recovery gesture;
 - remain available while the device is Passive / Unassigned;
 - remain available during Protected/restricted desktop contexts;
+- remain available while the display is in Display Sleep;
 - bypass normal profile/action suppression because it is an out-of-band device recovery path.
+
+When the recovery-capable button is pressed from Display Sleep:
+
+- the display SHOULD wake immediately at key-down;
+- ordinary mapped button execution MUST remain suppressed for that wake gesture;
+- waking the display MUST NOT reset or cancel the recovery hold timer;
+- reaching the recovery threshold MUST reboot the MCU;
+- releasing before the threshold MUST NOT retroactively execute the normal mapped button action.
 
 Factory reset MUST use a separate, harder-to-trigger mechanism.
 
@@ -936,9 +1058,13 @@ If firmware is so compromised that it cannot observe the recovery gesture, this 
 - [ ] Transition to Waiting after a user switch does not restore previous-user visual state.
 - [ ] Degraded/Disconnected transport does not automatically mark confirmed host execution as failed.
 - [ ] Reconnection reconciles current host execution without replaying its start command.
+- [ ] Reconnection does not replay stale completion transients for historical host jobs.
 - [ ] Recovery gesture works without desktop communication.
 - [ ] Recovery remains available in Passive state.
 - [ ] Recovery remains available during Protected/restricted desktop contexts.
+- [ ] Recovery remains available in Display Sleep and wakes the display immediately on key-down.
+- [ ] Display wake does not interrupt the recovery hold timer.
+- [ ] Early release of a recovery-capable wake press does not execute the mapped button action.
 - [ ] Recovery does not erase configuration.
 - [ ] Factory reset is not accidentally triggered by the ordinary recovery gesture.
 
@@ -1039,7 +1165,7 @@ Future multi-device roles MAY be introduced only through explicit assignment sem
 | Passive / Unassigned | Desktop session exists; this device is not the active controller | No ordinary mappings; recovery remains available |
 | Host Starting / Resuming | Host session is expected to become available | No |
 | Switching User | Known OS user-session transition; previous-user session presentation invalidated | No |
-| Reconnecting | Intentional temporary service interruption | No deferred execution |
+| Reconnecting | Intentional temporary service interruption | No deferred execution; restore current truth only |
 | Degraded | Device communication unhealthy but partially alive | Limited/current device actions only; host execution may remain valid |
 | Disconnected | Established device/session connection unexpectedly lost | No new device actions; confirmed host work may continue independently |
 | Sleeping / Locked | Host explicitly inactive/restricted | No normal custom actions |
@@ -1060,6 +1186,7 @@ Future multi-device roles MAY be introduced only through explicit assignment sem
 | Passive stable-focus commit | 300-500 ms |
 | Rotary acceleration inactivity reset | 250 ms |
 | Rotary gesture-end inactivity | 250 ms |
+| Lower-priority indicator promotion stabilization | ~250 ms |
 | Host startup/resume grace | 15-30 s |
 | Hardware recovery hold | ~10 s |
 
@@ -1069,7 +1196,11 @@ A deliberate Kivori interaction is not required to wait out the passive 300-500 
 
 A direction reversal resets acceleration immediately even when the prior direction has not been idle for 250 ms.
 
+Acceleration builds only while detents continue in the same direction; repeated direction flips therefore repeatedly restart at baseline.
+
 A rotary wake gesture remains one wake-only gesture until the 250 ms rotary gesture-end inactivity target is reached.
+
+Lower-priority secondary indicators use an initial ~250 ms promotion-stabilization target; higher-priority escalation is not delayed by that timer.
 
 # 6. Default Priority References
 
@@ -1081,6 +1212,8 @@ A rotary wake gesture remains one wake-only gesture until the 250 ms rotary gest
 
 A new deliberate interaction replaces older interaction feedback rather than waiting in a visual queue.
 
+Reconnection does not replay expired historical action transients.
+
 ## Secondary Indicator Priority
 
 1. Microphone state;
@@ -1090,6 +1223,8 @@ A new deliberate interaction replaces older interaction feedback rather than wai
 5. custom app-specific indicators.
 
 Custom indicator settings MAY reorder or hide indicators within the custom tier but MUST NOT displace protected system/privacy indicators.
+
+Priority escalation SHOULD appear immediately. When a higher-priority indicator disappears and exposes a lower-priority indicator, lower-priority promotion SHOULD use the initial ~250 ms stabilization window before reflowing the layout.
 
 # 7. MVP Boundaries
 
@@ -1102,8 +1237,10 @@ The following are explicitly outside this contract's MVP guarantees:
 - automatic inference of ambiguous sub-app identity;
 - implicit simultaneous-input chords;
 - replaying physical input after communication recovery;
+- replaying historical Success/Error presentation transients after reconnection;
 - automatic restart of an uncertain long-running host action after device reconnection;
 - silent retargeting of a gesture after its committed application disappears;
+- continuing application-scoped execution after known target loss within the same gesture;
 - multiple simultaneously Active Kivori controllers;
 - Passive devices acting as Monitor Mode;
 - driverless macro/media fallback without Kivori Desktop;
