@@ -279,3 +279,361 @@ fn reset_closes_the_gesture_silently_and_restarts_numbering() {
     let (started, _) = g.on_detent(Direction::Cw, 6_000);
     assert_eq!(started, Some(RotaryEvent::GestureStarted { gesture_id: 1 }));
 }
+
+use kivori_firmware::sim::ScriptedInput;
+use kivori_model::input::InputLevels;
+
+fn lv(a: bool, b: bool) -> InputLevels {
+    InputLevels { a, b, sw: false }
+}
+
+#[test]
+fn scripted_input_source_replays_levels_then_holds_the_last() {
+    use kivori_firmware::ports::InputSource;
+
+    let mut src = ScriptedInput::new(vec![lv(false, false), lv(false, true)]);
+    assert_eq!(src.sample(), lv(false, false));
+    assert_eq!(src.sample(), lv(false, true));
+    // Exhausted scripts hold the final level rather than wrapping or panicking.
+    assert_eq!(src.sample(), lv(false, true));
+}
+
+#[test]
+fn a_full_cw_cycle_through_the_port_produces_started_detent_ended() {
+    use kivori_firmware::sim::{drive_rotary, SeenInput};
+
+    // Host-sim end-to-end: scripted levels -> validated detent -> emitted event stream.
+    let levels = vec![
+        lv(false, false),
+        lv(false, true),
+        lv(true, true),
+        lv(true, false),
+        lv(false, false),
+    ];
+
+    assert_eq!(
+        drive_rotary(levels),
+        vec![
+            SeenInput::GestureStarted { gesture_id: 1 },
+            SeenInput::Detent {
+                gesture_id: 1,
+                direction: Direction::Cw
+            },
+            SeenInput::GestureEnded { gesture_id: 1 },
+        ]
+    );
+}
+
+#[test]
+fn a_reversal_stays_in_one_gesture_and_reports_both_directions() {
+    use kivori_firmware::sim::{drive_rotary, SeenInput};
+
+    let mut levels = vec![
+        // one CW detent
+        lv(false, false),
+        lv(false, true),
+        lv(true, true),
+        lv(true, false),
+        lv(false, false),
+    ];
+    // then one CCW detent, back the way it came
+    levels.extend_from_slice(&[
+        lv(true, false),
+        lv(true, true),
+        lv(false, true),
+        lv(false, false),
+    ]);
+
+    assert_eq!(
+        drive_rotary(levels),
+        vec![
+            SeenInput::GestureStarted { gesture_id: 1 },
+            SeenInput::Detent {
+                gesture_id: 1,
+                direction: Direction::Cw
+            },
+            SeenInput::Detent {
+                gesture_id: 1,
+                direction: Direction::Ccw
+            },
+            SeenInput::GestureEnded { gesture_id: 1 },
+        ]
+    );
+}
+
+#[test]
+fn the_dispatcher_records_the_accepted_session_nonce() {
+    // Uses the existing host-sim handshake helper pattern from
+    // `firmware/esp32-c3/tests/host_sim.rs`: drive Hello -> HelloAck -> Ready, then assert
+    // the dispatcher retained the nonce it accepted.
+    let d = kivori_firmware::sim::handshaken_dispatcher(0x1234_5678);
+    assert_eq!(d.accepted_session(), Some(0x1234_5678));
+}
+
+// --- capability gating (controller decision 1): send_input_event must stay inert unless BOTH a
+// session has been accepted AND the capability was negotiated. Each half is proven independently
+// so a shortcut implementation (e.g. gating on session alone) cannot pass by accident.
+
+use heapless::Vec as HVec;
+use kivori_firmware::proto::{DeviceIdentity, Dispatcher};
+use kivori_firmware::sim::{handshaken_dispatcher as handshaken, SimPipe};
+use kivori_firmware::state::DeviceState;
+use kivori_model::{Capabilities, ProtocolVersion};
+use kivori_protocol::{
+    decode_message, encode_message, ControlId, FirmwareVersion, Hello, InputKind, Message, Ready,
+    MAX_FRAME, MAX_WIRE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
+};
+
+fn gating_identity() -> DeviceIdentity {
+    DeviceIdentity {
+        device_id: [0xCD; 16],
+        firmware_version: FirmwareVersion {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
+        capabilities: Capabilities::PHYSICAL_INPUT_V1,
+    }
+}
+
+fn gating_wire_version() -> ProtocolVersion {
+    ProtocolVersion::new(PROTOCOL_MAJOR, PROTOCOL_MINOR)
+}
+
+/// Host -> device: frames `msg` with sequence `seq` onto the pipe (mirrors `tests/host_sim.rs`).
+fn gating_host_write(pipe: &mut SimPipe, msg: &Message, seq: u16) {
+    let mut wire: HVec<u8, MAX_WIRE> = HVec::new();
+    encode_message(msg, gating_wire_version(), seq, &mut wire).expect("encode");
+    pipe.host_send(&wire).expect("pipe has capacity");
+}
+
+/// Decodes every complete device -> host frame currently queued (mirrors `tests/host_sim.rs`).
+fn gating_host_drain(pipe: &mut SimPipe) -> Vec<Message> {
+    let bytes = pipe.host_recv();
+    let mut messages = Vec::new();
+    let mut scratch: HVec<u8, MAX_FRAME> = HVec::new();
+    for packet in bytes.split(|&b| b == 0) {
+        if packet.is_empty() {
+            continue;
+        }
+        if let Ok((_, msg)) = decode_message(packet, &mut scratch, &[PROTOCOL_MAJOR]) {
+            messages.push(msg);
+        }
+    }
+    messages
+}
+
+#[test]
+fn send_input_event_is_inert_without_a_negotiated_capability() {
+    // Session accepted (Hello answered) but Ready never negotiated PHYSICAL_INPUT_V1: the
+    // capability gate — not just the session gate — must be what stops emission.
+    let mut pipe = SimPipe::new();
+    let mut device = DeviceState::new();
+    let mut dispatcher = Dispatcher::new(gating_identity());
+
+    gating_host_write(
+        &mut pipe,
+        &Message::Hello(Hello {
+            desktop_version: FirmwareVersion {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            desktop_caps: Capabilities::NONE,
+            nonce: 0xAAAA_BBBB,
+        }),
+        0,
+    );
+    dispatcher.poll(&mut pipe, &mut device, 0).expect("poll");
+    assert_eq!(dispatcher.accepted_session(), Some(0xAAAA_BBBB));
+    let _ = pipe.host_recv(); // discard the HelloAck; only the gate under test matters here
+
+    let sent = dispatcher.send_input_event(&mut pipe, 1, InputKind::GestureStarted, 0);
+    assert!(!sent, "an unnegotiated capability must stay inert");
+    assert!(
+        gating_host_drain(&mut pipe).is_empty(),
+        "nothing may reach the wire"
+    );
+}
+
+#[test]
+fn send_input_event_is_inert_without_an_accepted_session() {
+    // Ready negotiates the capability, but Hello/HelloAck never happened: no session nonce was
+    // ever accepted, so emission must still stay inert.
+    let mut pipe = SimPipe::new();
+    let mut device = DeviceState::new();
+    let mut dispatcher = Dispatcher::new(gating_identity());
+
+    gating_host_write(
+        &mut pipe,
+        &Message::Ready(Ready {
+            negotiated_minor: 0,
+            negotiated_caps: Capabilities::PHYSICAL_INPUT_V1,
+        }),
+        0,
+    );
+    dispatcher.poll(&mut pipe, &mut device, 0).expect("poll");
+    assert_eq!(dispatcher.accepted_session(), None);
+
+    let sent = dispatcher.send_input_event(&mut pipe, 1, InputKind::GestureStarted, 0);
+    assert!(!sent, "no accepted session must stay inert");
+    assert!(gating_host_drain(&mut pipe).is_empty());
+}
+
+#[test]
+fn send_input_event_emits_on_the_wire_once_negotiated_and_accepted() {
+    let mut pipe = SimPipe::new();
+    let mut dispatcher = handshaken(0x1111_2222);
+
+    let sent = dispatcher.send_input_event(&mut pipe, 7, InputKind::Detent(Direction::Cw), 42);
+    assert!(
+        sent,
+        "a negotiated capability and accepted session must emit"
+    );
+
+    match gating_host_drain(&mut pipe).as_slice() {
+        [Message::InputEvent(event)] => {
+            assert_eq!(event.session, 0x1111_2222);
+            assert_eq!(event.gesture_id, 7);
+            assert_eq!(event.control, ControlId::Rotary);
+            assert_eq!(event.kind, InputKind::Detent(Direction::Cw));
+            assert_eq!(event.device_ms, 42);
+        }
+        other => panic!("expected a single InputEvent, got {other:?}"),
+    }
+}
+
+// --- session-boundary reset (controller decision 4): a gesture opened in one session must not
+// be completable, or silently continued, in the next one. Exercised through the real `Runtime`
+// (not just the decoder/gesture types directly), since the reset is wired in `Runtime::step`.
+
+use kivori_asset_compiler::compile_default_blob;
+use kivori_assets::AssetBlob;
+use kivori_firmware::runtime::{Runtime, RuntimeConfig};
+use kivori_firmware::sim::{CaptureDisplay, VirtualClock};
+use kivori_protocol::{Bye, ByeReason};
+
+/// One full CW detent cycle as a level script: 00 -> 01 -> 11 -> 10 -> 00.
+fn cw_cycle_levels() -> Vec<InputLevels> {
+    vec![
+        lv(false, false),
+        lv(false, true),
+        lv(true, true),
+        lv(true, false),
+        lv(false, false),
+    ]
+}
+
+#[test]
+fn a_gesture_open_before_bye_cannot_be_silently_continued_after_reconnecting() {
+    let mut runtime = Runtime::new(gating_identity(), RuntimeConfig::default());
+    let clock = VirtualClock::new();
+    let mut pipe = SimPipe::new();
+    let mut display = CaptureDisplay::new();
+    let blob_bytes = compile_default_blob();
+    let blob = AssetBlob::parse(&blob_bytes).expect("valid blob");
+    let mut idle = ScriptedInput::new(vec![lv(false, false)]);
+
+    // Session A: handshake, negotiating PHYSICAL_INPUT_V1.
+    gating_host_write(
+        &mut pipe,
+        &Message::Hello(Hello {
+            desktop_version: FirmwareVersion {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            desktop_caps: Capabilities::PHYSICAL_INPUT_V1,
+            nonce: 0xA000_0001,
+        }),
+        0,
+    );
+    runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
+    gating_host_write(
+        &mut pipe,
+        &Message::Ready(Ready {
+            negotiated_minor: 0,
+            negotiated_caps: Capabilities::PHYSICAL_INPUT_V1,
+        }),
+        1,
+    );
+    runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
+    let _ = pipe.host_recv();
+
+    // One full CW detent opens gesture 1 in session A. Well inside the 250ms window, so it stays
+    // open (no `GestureEnded` yet) when the session closes.
+    let mut cw = ScriptedInput::new(cw_cycle_levels());
+    for _ in 0..5 {
+        clock.advance(1);
+        runtime.step(&clock, &mut pipe, &mut cw, &mut display, &blob);
+    }
+    let opened_in_a = gating_host_drain(&mut pipe).into_iter().any(|m| {
+        matches!(
+            m,
+            Message::InputEvent(e) if e.session == 0xA000_0001
+                && matches!(e.kind, InputKind::GestureStarted)
+        )
+    });
+    assert!(
+        opened_in_a,
+        "the first detent must open a gesture in session A"
+    );
+
+    // `Bye` closes session A while the gesture is still open.
+    gating_host_write(
+        &mut pipe,
+        &Message::Bye(Bye {
+            reason: ByeReason::Shutdown,
+        }),
+        2,
+    );
+    runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
+    let _ = pipe.host_recv();
+
+    // Session B: a fresh handshake with a different nonce.
+    gating_host_write(
+        &mut pipe,
+        &Message::Hello(Hello {
+            desktop_version: FirmwareVersion {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            desktop_caps: Capabilities::PHYSICAL_INPUT_V1,
+            nonce: 0xB000_0002,
+        }),
+        3,
+    );
+    runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
+    gating_host_write(
+        &mut pipe,
+        &Message::Ready(Ready {
+            negotiated_minor: 0,
+            negotiated_caps: Capabilities::PHYSICAL_INPUT_V1,
+        }),
+        4,
+    );
+    runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
+    let _ = pipe.host_recv();
+
+    // A second full CW detent in session B. Without the reset, `RotaryGesture` would still think
+    // gesture 1 from session A is open and would silently continue it (no `GestureStarted`) — a
+    // gesture from the old session leaking into the new one.
+    let mut cw2 = ScriptedInput::new(cw_cycle_levels());
+    for _ in 0..5 {
+        clock.advance(1);
+        runtime.step(&clock, &mut pipe, &mut cw2, &mut display, &blob);
+    }
+    let opened_fresh_in_b = gating_host_drain(&mut pipe).into_iter().any(|m| {
+        matches!(
+            m,
+            Message::InputEvent(e) if e.session == 0xB000_0002
+                && matches!(e.kind, InputKind::GestureStarted)
+        )
+    });
+    assert!(
+        opened_fresh_in_b,
+        "a fresh GestureStarted must fire in session B; the old session's open gesture must not \
+         silently continue across the boundary"
+    );
+}

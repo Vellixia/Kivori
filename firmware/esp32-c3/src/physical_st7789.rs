@@ -28,11 +28,29 @@ use mipidsi::{interface::SpiInterface, Builder};
 
 use crate::{
     display::MipidsiSink,
+    ports::InputSource,
     profile::physical_st7789 as hw,
     proto::DeviceIdentity,
     runtime::{run, RuntimeConfig},
     transport::{TxBuffered, UsbJtagTransport},
 };
+use kivori_model::input::InputLevels;
+
+/// A constant-level stub: always reports no motion on any channel.
+///
+/// Physical GPIO sampling for the rotary encoder is not implemented until Task 13; until then this
+/// keeps the run loop's `InputSource` port wired with a placeholder that never produces a detent.
+struct NoInput;
+
+impl InputSource for NoInput {
+    fn sample(&mut self) -> InputLevels {
+        InputLevels {
+            a: false,
+            b: false,
+            sw: false,
+        }
+    }
+}
 
 /// Number of bytes used by `mipidsi` for batching SPI display writes.
 const SPI_BATCH_BYTES: usize = 512;
@@ -202,6 +220,7 @@ pub fn run_mode(
         RuntimeConfig::default(),
         &clock,
         &mut transport,
+        &mut NoInput,
         &mut display,
         &blob,
         |_tick, _transport| {},

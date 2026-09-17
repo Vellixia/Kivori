@@ -1,16 +1,19 @@
-//! The production device runtime (T074): the real run loop, written against the three ports.
+//! The production device runtime (T074): the real run loop, written against the four ports.
 //!
 //! This is **the** firmware behaviour. It is not a harness, not a self-test, and not simulation-specific:
 //! the physical binary and the Wokwi `wokwi-runtime` mode call the same [`run`] with the same [`Runtime`],
-//! differing only in which [`Clock`], [`Transport`], and [`DisplaySink`] instances they hand it and which
-//! panel profile built the sink. There is deliberately no second loop implementation to drift.
+//! differing only in which [`Clock`], [`Transport`], [`InputSource`], and [`DisplaySink`] instances they
+//! hand it and which panel profile built the sink. There is deliberately no second loop implementation to
+//! drift.
 //!
 //! Each tick, in order:
 //!
 //! 1. finish boot once — `booting` → `offline`, the device-originated transition (FR-014/015);
 //! 2. drain inbound bytes through the real decoder, sequence policy, and [`Dispatcher`], which answers
-//!    `Hello`/`Ping`/`SetState` and drops malformed frames without side effects (SC-008);
-//! 3. push any queued outbound bytes toward the hardware (the caller's transport may buffer);
+//!    `Hello`/`Ping`/`SetState` and drops malformed frames without side effects (SC-008); a session-ending
+//!    `Bye` also resets the rotary decoder/gesture state so no gesture survives into a new session;
+//! 3. sample physical input once, decode validated detents, and emit semantic `InputEvent`s — gated by
+//!    the negotiated `PHYSICAL_INPUT_V1` capability and an accepted session inside the dispatcher;
 //! 4. render the current state through the shared renderer, flushing only changed tiles (FR-013);
 //! 5. emit at most one safe `Diagnostic` (allowlisted category + code — never payload bytes);
 //! 6. emit `Health` on a fixed interval.
@@ -25,13 +28,20 @@
 //! order, and backlight are supplied from outside this module and remain unconfirmed.
 
 use crate::health::{build_diagnostic, build_health, DeviceDiagnostic};
-use crate::ports::{Clock, DisplaySink, Transport};
+use crate::input::gesture::{RotaryEvent, RotaryGesture};
+use crate::input::quadrature::QuadratureDecoder;
+use crate::ports::{Clock, DisplaySink, InputSource, Transport};
 use crate::proto::{DeviceIdentity, Dispatcher};
 use crate::render::TileRenderer;
 use crate::state::{DeviceEvent, DeviceState};
 use kivori_assets::AssetBlob;
 use kivori_model::{CompanionState, ElapsedMs};
-use kivori_protocol::Message;
+use kivori_protocol::{InputKind, Message};
+
+/// Inactivity window, in milliseconds, after which an open rotary gesture ends
+/// (user-story-contract section 5). Firmware-wide: both the production runtime and the host-sim
+/// scenario helper (`sim::drive_rotary`) commit to this same boundary.
+const GESTURE_END_MS: u32 = 250;
 
 /// Loop timings. Both are integer milliseconds, so behaviour is deterministic (ADR-0003).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,6 +126,10 @@ pub struct Runtime {
     next_frame_ms: ElapsedMs,
     next_health_ms: ElapsedMs,
     last_rendered: Option<CompanionState>,
+    /// Turns raw quadrature levels into validated logical detents (never raw electrical edges).
+    decoder: QuadratureDecoder,
+    /// Groups validated detents into gestures (identity + the 250 ms inactivity boundary).
+    gesture: RotaryGesture,
 }
 
 impl Runtime {
@@ -131,6 +145,8 @@ impl Runtime {
             next_frame_ms: 0,
             next_health_ms: 0,
             last_rendered: None,
+            decoder: QuadratureDecoder::new(),
+            gesture: RotaryGesture::new(GESTURE_END_MS),
         }
     }
 
@@ -150,16 +166,18 @@ impl Runtime {
     ///
     /// Never fails: a transport error becomes a `LinkLost` diagnostic and an `offline` transition, because a
     /// device that gives up on a bad cable is worse than one that waits for the host to come back.
-    pub fn step<C, T, D>(
+    pub fn step<C, T, I, D>(
         &mut self,
         clock: &C,
         transport: &mut T,
+        input: &mut I,
         display: &mut D,
         blob: &AssetBlob,
     ) -> Tick
     where
         C: Clock,
         T: Transport,
+        I: InputSource,
         D: DisplaySink,
     {
         let mut tick = Tick::default();
@@ -182,8 +200,46 @@ impl Runtime {
             self.dispatcher.note_diagnostic(DeviceDiagnostic::LinkLost);
             tick.link_dropped = true;
         }
+        // A `Bye` this poll closed the session: a gesture (or partial motion) from the old
+        // session must never complete in a new one (no-stale-replay invariant).
+        if self.dispatcher.take_session_ended() {
+            self.decoder.reset();
+            self.gesture.reset();
+        }
 
-        // 3. Render on the frame cadence: only changed tiles reach the panel (FR-013). A state change
+        // 3. Physical input: sample once per tick, turn validated detents into gestures, and emit
+        //    semantic `InputEvent`s. `send_input_event` itself gates on capability/session, so this
+        //    stays silent until the desktop has negotiated `PHYSICAL_INPUT_V1`.
+        let levels = input.sample();
+        if let Some(direction) = self.decoder.update(levels.a, levels.b) {
+            let (started, detent) = self.gesture.on_detent(direction, now);
+            if let Some(RotaryEvent::GestureStarted { gesture_id }) = started {
+                self.dispatcher.send_input_event(
+                    transport,
+                    gesture_id,
+                    InputKind::GestureStarted,
+                    now,
+                );
+            }
+            if let RotaryEvent::Detent {
+                gesture_id,
+                direction,
+            } = detent
+            {
+                self.dispatcher.send_input_event(
+                    transport,
+                    gesture_id,
+                    InputKind::Detent(direction),
+                    now,
+                );
+            }
+        }
+        if let Some(RotaryEvent::GestureEnded { gesture_id }) = self.gesture.poll(now) {
+            self.dispatcher
+                .send_input_event(transport, gesture_id, InputKind::GestureEnded, now);
+        }
+
+        // 4. Render on the frame cadence: only changed tiles reach the panel (FR-013). A state change
         //    invalidates the cache, because the previous frame's tiles belong to a different scene.
         if now >= self.next_frame_ms {
             self.next_frame_ms = now.saturating_add(self.config.frame_interval_ms);
@@ -210,7 +266,7 @@ impl Runtime {
             }
         }
 
-        // 4. At most one safe diagnostic per tick, category + code only (ADR-0005).
+        // 5. At most one safe diagnostic per tick, category + code only (ADR-0005).
         if let Some(diagnostic) = self.dispatcher.take_diagnostic() {
             let message = Message::Diagnostic(build_diagnostic(diagnostic));
             if self.dispatcher.emit(transport, &message).is_ok() {
@@ -218,7 +274,7 @@ impl Runtime {
             }
         }
 
-        // 5. Heartbeat health on a fixed cadence.
+        // 6. Heartbeat health on a fixed cadence.
         if now >= self.next_health_ms {
             self.next_health_ms = now.saturating_add(self.config.health_interval_ms);
             let message = Message::Health(build_health(free_bytes()));
@@ -251,11 +307,15 @@ const fn free_bytes() -> u32 {
 /// Runs the production loop forever.
 ///
 /// The physical binary and the Wokwi runtime mode both call this; only the injected ports differ.
-pub fn run<C, T, D>(
+// One argument per port/config/observer — bundling them would obscure which port is which at every
+// call site for no real benefit here.
+#[allow(clippy::too_many_arguments)]
+pub fn run<C, T, I, D>(
     identity: DeviceIdentity,
     config: RuntimeConfig,
     clock: &C,
     transport: &mut T,
+    input: &mut I,
     display: &mut D,
     blob: &AssetBlob,
     mut observe: impl FnMut(&Tick, &mut T),
@@ -263,11 +323,12 @@ pub fn run<C, T, D>(
 where
     C: Clock,
     T: Transport,
+    I: InputSource,
     D: DisplaySink,
 {
     let mut runtime = Runtime::new(identity, config);
     loop {
-        let tick = runtime.step(clock, transport, display, blob);
+        let tick = runtime.step(clock, transport, input, display, blob);
         // The observer receives the transport so a simulation mode can emit text markers over the same
         // link the protocol uses. The production binary passes a closure that does nothing.
         observe(&tick, transport);

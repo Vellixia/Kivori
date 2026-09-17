@@ -10,8 +10,9 @@ use crate::state::{DeviceEvent, DeviceState};
 use heapless::Vec;
 use kivori_model::{Capabilities, ProtocolVersion};
 use kivori_protocol::{
-    decode_message, encode_message, DeviceId, FirmwareVersion, HelloAck, Message, SeqClass,
-    SequenceTracker, StateReport, MAX_FRAME, MAX_WIRE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
+    decode_message, encode_message, ControlId, DeviceId, FirmwareVersion, HelloAck, InputEvent,
+    InputKind, Message, Nonce, SeqClass, SequenceTracker, StateReport, MAX_FRAME, MAX_WIRE,
+    PROTOCOL_MAJOR, PROTOCOL_MINOR,
 };
 
 /// Inbound accumulation capacity: room for a partial packet plus one full wire packet.
@@ -54,6 +55,16 @@ pub struct Dispatcher {
     hello_acks: u32,
     pongs: u32,
     state_reports: u32,
+    /// The session nonce accepted at the last `Hello`, or `None` before any handshake / after
+    /// `Bye`/link loss. The only session an emitted `InputEvent` may claim.
+    accepted_session: Option<Nonce>,
+    /// The capability set negotiated for the current session (set from `Ready`; the protocol
+    /// crate itself is capability-blind, so this is the dispatcher's own gate).
+    negotiated_caps: Capabilities,
+    /// Set when `Bye` just closed the session, so the caller can reset any input state (the
+    /// decoder/gesture layers) that must not survive a session boundary. Single-slot, like
+    /// `pending`: consumed once via [`Self::take_session_ended`].
+    session_ended: bool,
 }
 
 impl Dispatcher {
@@ -71,6 +82,9 @@ impl Dispatcher {
             hello_acks: 0,
             pongs: 0,
             state_reports: 0,
+            accepted_session: None,
+            negotiated_caps: Capabilities::NONE,
+            session_ended: false,
         }
     }
 
@@ -98,6 +112,41 @@ impl Dispatcher {
         self.rejected
     }
 
+    /// The session nonce accepted at the last `Hello`, or `None` before any handshake, after
+    /// `Bye`, or after a link loss.
+    #[must_use]
+    pub const fn accepted_session(&self) -> Option<Nonce> {
+        self.accepted_session
+    }
+
+    /// Encode one input event. Returns `false` when the capability is not negotiated
+    /// or no session is accepted — an unnegotiated capability MUST stay inert.
+    pub fn send_input_event<T: Transport>(
+        &mut self,
+        transport: &mut T,
+        gesture_id: u16,
+        kind: InputKind,
+        device_ms: u32,
+    ) -> bool {
+        if !self
+            .negotiated_caps
+            .contains(Capabilities::PHYSICAL_INPUT_V1)
+        {
+            return false;
+        }
+        let Some(session) = self.accepted_session else {
+            return false;
+        };
+        let msg = Message::InputEvent(InputEvent {
+            session,
+            gesture_id,
+            control: ControlId::Rotary,
+            kind,
+            device_ms,
+        });
+        self.send(transport, &msg).is_ok()
+    }
+
     /// Takes the pending safe diagnostic, if any. The caller decides whether to transmit it.
     pub fn take_diagnostic(&mut self) -> Option<DeviceDiagnostic> {
         self.pending.take()
@@ -106,6 +155,12 @@ impl Dispatcher {
     /// Records an allowlisted diagnostic for the caller to pick up (e.g. a display fault the run loop saw).
     pub fn note_diagnostic(&mut self, diagnostic: DeviceDiagnostic) {
         self.pending = Some(diagnostic);
+    }
+
+    /// Takes the "a session just ended" flag, if set. `true` at most once per `Bye`, so the
+    /// caller can reset session-scoped input state exactly once per boundary.
+    pub fn take_session_ended(&mut self) -> bool {
+        core::mem::take(&mut self.session_ended)
     }
 
     /// Encodes and writes a device-originated message (`Health`, `Diagnostic`) on the session's sequence.
@@ -212,6 +267,12 @@ impl Dispatcher {
                 };
                 self.send(transport, &Message::HelloAck(ack))?;
                 self.hello_acks = self.hello_acks.saturating_add(1);
+                self.accepted_session = Some(hello.nonce);
+            }
+            Message::Ready(ready) => {
+                // The desktop's own capability intersection; the dispatcher trusts it as the
+                // negotiated set (`negotiate` already ran on the desktop side of this handshake).
+                self.negotiated_caps = ready.negotiated_caps;
             }
             Message::SetState(set) => {
                 if let Some(now) = device.apply(DeviceEvent::SetState(set.desired)) {
@@ -232,8 +293,13 @@ impl Dispatcher {
                 let _ = device.apply(DeviceEvent::LinkDown);
                 self.tracker = SequenceTracker::new();
                 self.pending = Some(DeviceDiagnostic::LinkLost);
+                // A gesture (or partial motion) from the old session must never complete in a new
+                // one, so the caller resets its input state too (invariant: no stale replay).
+                self.accepted_session = None;
+                self.negotiated_caps = Capabilities::NONE;
+                self.session_ended = true;
             }
-            // `Ready` and the device→desktop message kinds are not acted on by the device.
+            // The device→desktop message kinds are not acted on by the device.
             _ => {}
         }
         Ok(())
