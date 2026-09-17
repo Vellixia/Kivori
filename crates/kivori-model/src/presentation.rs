@@ -6,6 +6,10 @@
 use serde::{Deserialize, Serialize};
 
 /// The underlying state that remains true beneath any transient overlay.
+///
+/// Wire-significant (nested inside `kivori_protocol::message::Presentation`): the variant index is
+/// part of the postcard wire encoding. **Append-only** — variants may only be added at the end,
+/// never reordered or removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrimaryState {
     /// No active interaction; nothing to show beyond the base scene.
@@ -19,6 +23,10 @@ pub enum PrimaryState {
 }
 
 /// Which kind of value a [`ValueDisplay`] represents.
+///
+/// Wire-significant (nested inside `kivori_protocol::message::Presentation` via [`ValueDisplay`]):
+/// the variant index is part of the postcard wire encoding. **Append-only** — variants may only be
+/// added at the end, never reordered or removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ValueKind {
     /// Master volume, 0..=100.
@@ -29,6 +37,10 @@ pub enum ValueKind {
 ///
 /// An optimistic local preview MUST NOT be rendered as observed desktop truth
 /// (user-story-contract invariant 3).
+///
+/// Wire-significant (nested inside `kivori_protocol::message::Presentation` via [`ValueDisplay`]):
+/// the variant index is part of the postcard wire encoding. **Append-only** — variants may only be
+/// added at the end, never reordered or removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ValueConfidence {
     /// Kivori's local target during an open gesture; not yet observed from the OS.
