@@ -60,9 +60,14 @@ impl QuadratureDecoder {
         let step = match quarter_step(prev, next) {
             Some(step) => step,
             None => {
-                // Both bits changed: impossible for a real contact. Never invent motion.
+                // Both bits changed: impossible for a real contact, so a state was missed
+                // or the signal was corrupted. The traversal is no longer continuous, so
+                // banked quarter-steps cannot be trusted to splice with what comes after
+                // this gap — reset the accumulator rather than risk completing a detent
+                // that was never fully, legally observed (contract invariant 42; R-77).
                 self.invalid = self.invalid.saturating_add(1);
                 self.phase = Some(next);
+                self.accumulator = 0;
                 return None;
             }
         };

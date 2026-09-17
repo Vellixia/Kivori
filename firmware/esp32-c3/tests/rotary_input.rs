@@ -97,3 +97,86 @@ fn reversal_mid_cycle_does_not_emit_a_detent() {
     ];
     assert_eq!(drive(&seq), vec![]);
 }
+
+#[test]
+fn invalid_transition_discards_quarter_steps_banked_before_it() {
+    // 00 -> 01 -> 11 banks two clockwise quarter-steps, then 11 -> 00 is an illegal
+    // double-bit transition. Two more clockwise quarter-steps follow. If the banked
+    // steps survived the discontinuity they would splice with the steps after it
+    // (2 + 2 = 4) and wrongly complete a detent; invariant 42 / R-77 / R-82 require
+    // that a detent only ever be emitted for a continuous, fully observed traversal.
+    let mut d = QuadratureDecoder::new();
+    let mut out = Vec::new();
+    for &(a, b) in &[
+        (false, false),
+        (false, true),
+        (true, true),
+        (false, false), // illegal: 11 -> 00, both bits change
+        (false, true),
+        (true, true),
+    ] {
+        if let Some(dir) = d.update(a, b) {
+            out.push(dir);
+        }
+    }
+    assert_eq!(out, vec![]);
+    assert_eq!(d.invalid_transitions(), 1);
+}
+
+#[test]
+fn detent_completes_normally_immediately_after_an_invalid_transition() {
+    // After the same illegal 11 -> 00 discontinuity used above, a full, continuous
+    // clockwise cycle should still complete cleanly — an invalid transition must not
+    // wedge the decoder against ever emitting again.
+    let seq = [
+        (false, false),
+        (false, true),
+        (true, true),
+        (false, false), // illegal: 11 -> 00, both bits change
+        (false, true),
+        (true, true),
+        (true, false),
+        (false, false),
+    ];
+    assert_eq!(drive(&seq), vec![Direction::Cw]);
+}
+
+#[test]
+fn reset_drops_both_phase_and_accumulator() {
+    // Bank three of the four quarter-steps of a clockwise detent, then reset. If
+    // `reset` failed to clear the accumulator, the very next quarter-step after the
+    // reset would splice with the stale count and complete a detent one step early.
+    let mut d = QuadratureDecoder::new();
+    let mut out = Vec::new();
+
+    for &(a, b) in &[
+        (false, false), // establish phase 00
+        (false, true),  // 01, acc = 1
+        (true, true),   // 11, acc = 2
+        (true, false),  // 10, acc = 3 (one shy of a detent)
+    ] {
+        if let Some(dir) = d.update(a, b) {
+            out.push(dir);
+        }
+    }
+
+    d.reset();
+
+    // Re-establishes phase (must not be treated as a transition from the pre-reset
+    // phase), then one more quarter-step. If the accumulator had leaked across reset
+    // (stale 3 + 1), this would wrongly complete a detent here already.
+    for &(a, b) in &[(false, false), (false, true)] {
+        if let Some(dir) = d.update(a, b) {
+            out.push(dir);
+        }
+    }
+    assert_eq!(out, vec![], "reset must have dropped the stale accumulator");
+
+    // The decoder must not be wedged: a genuine full cycle from here still completes.
+    for &(a, b) in &[(true, true), (true, false), (false, false)] {
+        if let Some(dir) = d.update(a, b) {
+            out.push(dir);
+        }
+    }
+    assert_eq!(out, vec![Direction::Cw]);
+}
