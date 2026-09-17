@@ -180,3 +180,102 @@ fn reset_drops_both_phase_and_accumulator() {
     }
     assert_eq!(out, vec![Direction::Cw]);
 }
+
+use kivori_firmware::input::gesture::{RotaryEvent, RotaryGesture};
+
+const GESTURE_END_MS: u32 = 250;
+
+#[test]
+fn first_detent_opens_a_gesture_and_reports_the_detent() {
+    let mut g = RotaryGesture::new(GESTURE_END_MS);
+    let (started, detent) = g.on_detent(Direction::Cw, 1_000);
+    assert_eq!(started, Some(RotaryEvent::GestureStarted { gesture_id: 1 }));
+    assert_eq!(
+        detent,
+        RotaryEvent::Detent {
+            gesture_id: 1,
+            direction: Direction::Cw
+        }
+    );
+}
+
+#[test]
+fn detents_inside_the_window_stay_in_one_gesture() {
+    let mut g = RotaryGesture::new(GESTURE_END_MS);
+    let (started, _) = g.on_detent(Direction::Cw, 1_000);
+    assert!(started.is_some());
+
+    // 249 ms later: still the same gesture, so no new GestureStarted.
+    let (started, detent) = g.on_detent(Direction::Cw, 1_249);
+    assert_eq!(started, None);
+    assert_eq!(
+        detent,
+        RotaryEvent::Detent {
+            gesture_id: 1,
+            direction: Direction::Cw
+        }
+    );
+}
+
+#[test]
+fn gesture_ends_after_the_inactivity_window() {
+    let mut g = RotaryGesture::new(GESTURE_END_MS);
+    g.on_detent(Direction::Cw, 1_000);
+
+    assert_eq!(
+        g.poll(1_249),
+        None,
+        "must not end before the window elapses"
+    );
+    assert_eq!(
+        g.poll(1_250),
+        Some(RotaryEvent::GestureEnded { gesture_id: 1 })
+    );
+    assert_eq!(g.poll(1_500), None, "GestureEnded is emitted exactly once");
+}
+
+#[test]
+fn a_detent_after_the_window_opens_a_new_gesture_id() {
+    let mut g = RotaryGesture::new(GESTURE_END_MS);
+    g.on_detent(Direction::Cw, 1_000);
+    assert_eq!(
+        g.poll(1_250),
+        Some(RotaryEvent::GestureEnded { gesture_id: 1 })
+    );
+
+    let (started, detent) = g.on_detent(Direction::Ccw, 2_000);
+    assert_eq!(started, Some(RotaryEvent::GestureStarted { gesture_id: 2 }));
+    assert_eq!(
+        detent,
+        RotaryEvent::Detent {
+            gesture_id: 2,
+            direction: Direction::Ccw
+        }
+    );
+}
+
+#[test]
+fn reversal_within_a_gesture_does_not_split_the_gesture() {
+    let mut g = RotaryGesture::new(GESTURE_END_MS);
+    g.on_detent(Direction::Cw, 1_000);
+    let (started, detent) = g.on_detent(Direction::Ccw, 1_100);
+    assert_eq!(started, None, "reversal is not a new gesture");
+    assert_eq!(
+        detent,
+        RotaryEvent::Detent {
+            gesture_id: 1,
+            direction: Direction::Ccw
+        }
+    );
+}
+
+#[test]
+fn reset_closes_the_gesture_silently_and_restarts_numbering() {
+    let mut g = RotaryGesture::new(GESTURE_END_MS);
+    g.on_detent(Direction::Cw, 1_000);
+    g.reset();
+    assert_eq!(g.poll(5_000), None, "a reset gesture emits no GestureEnded");
+
+    let (started, _) = g.on_detent(Direction::Cw, 6_000);
+    assert_eq!(started, Some(RotaryEvent::GestureStarted { gesture_id: 1 }));
+}
