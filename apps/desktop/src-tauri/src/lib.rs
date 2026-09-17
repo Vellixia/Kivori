@@ -6,6 +6,7 @@
 
 pub mod device;
 pub mod diagnostics;
+pub mod input;
 pub mod ipc;
 pub mod orchestrator;
 pub mod render;
