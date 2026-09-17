@@ -3,6 +3,7 @@
 //! primitive (length, sequence, counts) — never raw bytes, ids, paths, or secrets.
 
 use crate::device::connection::hash_device_id_short;
+use crate::device::nonce::NonceError;
 use kivori_model::ConnectionState;
 use kivori_protocol::{DeviceId, ErrorCategory, ProtoError};
 
@@ -33,6 +34,14 @@ pub fn category_for_connection(state: ConnectionState) -> ErrorCategory {
         ConnectionState::Incompatible => ErrorCategory::Version,
         ConnectionState::Disconnected | ConnectionState::Error => ErrorCategory::Io,
     }
+}
+
+/// Maps a session-nonce failure to its safe [`ErrorCategory`]. The OS entropy source is an
+/// I/O-class host dependency, so its unavailability is categorized the same as any other I/O fault
+/// (the nonce is a freshness token, not a security credential — this is not a `Handshake` failure).
+#[must_use]
+pub fn category_for_nonce_error(_error: &NonceError) -> ErrorCategory {
+    ErrorCategory::Io
 }
 
 /// Reduces a raw device identity to the short, non-reversible token that is the ONLY identity form

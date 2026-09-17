@@ -6,14 +6,15 @@ use std::collections::VecDeque;
 use std::convert::Infallible;
 
 use kivori_desktop::device::fsm::ConnectionManager;
-use kivori_desktop::device::session::{Session, SessionConfig};
+use kivori_desktop::device::nonce::{FailingNonceSource, FixedNonceSource};
+use kivori_desktop::device::session::{Session, SessionConfig, SessionError};
 use kivori_desktop::device::transport::SerialLink;
 use kivori_desktop::device::ManagerEvent;
 use kivori_desktop::orchestrator::Orchestrator;
 use kivori_model::{Capabilities, ConnectionState, ProtocolVersion, SendableState};
 use kivori_protocol::{
-    decode_message, encode_message, FirmwareVersion, HelloAck, Message, Pong, PROTOCOL_MAJOR,
-    PROTOCOL_MINOR,
+    decode_message, encode_message, Bye, ByeReason, FirmwareVersion, HelloAck, Message, Pong,
+    PROTOCOL_MAJOR, PROTOCOL_MINOR,
 };
 
 #[derive(Default)]
@@ -289,5 +290,113 @@ fn reconnect_resyncs_the_within_process_desired_state() {
     assert_eq!(
         set_state_desired(&desktop_drain(&mut link)),
         Some(SendableState::Busy)
+    );
+}
+
+/// A link whose `read` always fails, used to simulate an I/O loss on an already-connected session.
+#[derive(Default)]
+struct AlwaysFailingReadLink;
+
+impl SerialLink for AlwaysFailingReadLink {
+    type Error = &'static str;
+
+    fn read(&mut self, _buf: &mut [u8]) -> Result<usize, Self::Error> {
+        Err("simulated read failure")
+    }
+
+    fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        Ok(buf.len())
+    }
+}
+
+#[test]
+fn a_nonce_unavailable_source_fails_the_attempt_and_never_reaches_connected() {
+    let mut link = FakeLink::default();
+    let mut session =
+        Session::with_nonce_source(SessionConfig::default(), Box::new(FailingNonceSource));
+    let mut manager = ConnectionManager::new();
+
+    let result = session.open(&mut link, &mut manager);
+
+    assert_eq!(
+        result,
+        Err(SessionError::NonceUnavailable),
+        "no OS entropy → the connection attempt fails, it does not panic"
+    );
+    assert_ne!(
+        manager.state(),
+        ConnectionState::Connected,
+        "a session with no nonce must never reach Connected"
+    );
+    // No Hello was ever sent — the failure is before any wire traffic.
+    assert!(desktop_drain(&mut link).is_empty());
+}
+
+#[test]
+fn current_session_is_none_before_handshake_and_set_after_it_is_accepted() {
+    let mut link = FakeLink::default();
+    let mut session = Session::with_nonce_source(
+        SessionConfig::default(),
+        Box::new(FixedNonceSource::new(vec![42])),
+    );
+    let mut manager = ConnectionManager::new();
+    let mut orchestrator = Orchestrator::new();
+
+    assert_eq!(session.current_session(), None);
+
+    session.open(&mut link, &mut manager).expect("open");
+    assert_eq!(
+        session.current_session(),
+        None,
+        "not yet connection-scoped identity until the handshake is accepted"
+    );
+
+    device_push(&mut link, &device_ack(42), wire_version(), 0);
+    session
+        .pump(&mut link, &mut manager, &mut orchestrator)
+        .expect("pump");
+
+    assert_eq!(manager.state(), ConnectionState::Connected);
+    assert_eq!(session.current_session(), Some(42));
+}
+
+#[test]
+fn current_session_is_cleared_on_a_received_bye() {
+    let (mut link, mut session, mut manager, mut orch) = connect(SendableState::Idle);
+    assert_eq!(manager.state(), ConnectionState::Connected);
+    assert!(session.current_session().is_some());
+
+    device_push(
+        &mut link,
+        &Message::Bye(Bye {
+            reason: ByeReason::Shutdown,
+        }),
+        wire_version(),
+        1,
+    );
+    session
+        .pump(&mut link, &mut manager, &mut orch)
+        .expect("pump handles Bye");
+
+    assert_eq!(
+        session.current_session(),
+        None,
+        "a received Bye ends the session's identity"
+    );
+}
+
+#[test]
+fn current_session_is_cleared_when_the_link_fails() {
+    let (_link, mut session, mut manager, mut orch) = connect(SendableState::Idle);
+    assert!(session.current_session().is_some());
+
+    let mut failing_link = AlwaysFailingReadLink;
+    let result = session.pump(&mut failing_link, &mut manager, &mut orch);
+
+    assert!(result.is_err(), "the read failure must surface as an error");
+    assert_eq!(
+        session.current_session(),
+        None,
+        "an I/O failure must not leave a stale session identity behind"
     );
 }

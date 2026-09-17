@@ -31,6 +31,7 @@ serialport = "4"  # production USB-serial transport (research R-5). Windows/macO
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+getrandom = "0.2"  # session-nonce freshness (Slice 002). NOT a security credential; not a network crate.
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
