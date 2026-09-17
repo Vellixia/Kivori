@@ -116,3 +116,93 @@ fn a_gesture_cannot_continue_after_it_ended() {
         Err(RejectReason::UnknownGesture)
     );
 }
+
+use kivori_desktop::action::volume::{apply_step, BASE_STEP_PERCENT};
+use kivori_desktop::action::{resolve_binding, ActionId, Outcome};
+use kivori_desktop::platform::{ActionAvailability, FakeVolumeBackend};
+
+#[test]
+fn the_global_rotary_binding_resolves_to_master_volume() {
+    assert_eq!(
+        resolve_binding(ControlId::Rotary),
+        Some(ActionId::MasterVolume)
+    );
+}
+
+#[test]
+fn one_detent_moves_exactly_the_base_step() {
+    assert_eq!(
+        apply_step(50, Direction::Cw),
+        (50 + BASE_STEP_PERCENT, false)
+    );
+    assert_eq!(
+        apply_step(50, Direction::Ccw),
+        (50 - BASE_STEP_PERCENT, false)
+    );
+}
+
+#[test]
+fn values_clamp_at_both_bounds_and_flag_the_boundary() {
+    assert_eq!(apply_step(100, Direction::Cw), (100, true));
+    assert_eq!(apply_step(0, Direction::Ccw), (0, true));
+    // Approaching the bound from inside one step lands exactly on it, not past it.
+    assert_eq!(apply_step(99, Direction::Cw), (100, false));
+    assert_eq!(apply_step(1, Direction::Ccw), (0, false));
+}
+
+#[test]
+fn the_first_reverse_detent_leaves_the_boundary_immediately() {
+    let (at_max, boundary) = apply_step(100, Direction::Cw);
+    assert!(boundary);
+    assert_eq!(
+        apply_step(at_max, Direction::Ccw),
+        (100 - BASE_STEP_PERCENT, false)
+    );
+}
+
+#[test]
+fn a_successful_set_with_readback_is_state_confirmed() {
+    let backend = FakeVolumeBackend::new(40);
+    let outcome = kivori_desktop::action::execute_volume(&backend, 60);
+    assert_eq!(outcome, Outcome::StateConfirmed { volume_percent: 60 });
+}
+
+#[test]
+fn state_confirmed_reports_the_observed_value_not_the_requested_one() {
+    let backend = FakeVolumeBackend::quantised(40, 5);
+    let outcome = kivori_desktop::action::execute_volume(&backend, 62);
+    assert_eq!(
+        outcome,
+        Outcome::StateConfirmed { volume_percent: 60 },
+        "confirmation must carry OS truth, never the request"
+    );
+}
+
+#[test]
+fn a_write_without_readback_is_unverified_never_confirmed() {
+    let backend = FakeVolumeBackend::unreadable_after_write(30);
+    assert_eq!(
+        kivori_desktop::action::execute_volume(&backend, 40),
+        Outcome::TriggeredUnverified
+    );
+}
+
+#[test]
+fn an_unavailable_backend_fails_rather_than_silently_succeeding() {
+    let backend = FakeVolumeBackend::with_availability(ActionAvailability::RuntimeUnavailable {
+        reason: "no default render endpoint".to_string(),
+    });
+    assert!(matches!(
+        kivori_desktop::action::execute_volume(&backend, 40),
+        Outcome::Failed { .. }
+    ));
+}
+
+#[test]
+fn an_unimplemented_backend_does_not_attempt_execution() {
+    let backend = kivori_desktop::platform::unimplemented::UnimplementedVolumeBackend::new("macos");
+    assert!(matches!(
+        kivori_desktop::action::execute_volume(&backend, 40),
+        Outcome::Failed { .. }
+    ));
+}
