@@ -9,6 +9,7 @@ pub mod diagnostics;
 pub mod input;
 pub mod ipc;
 pub mod orchestrator;
+pub mod platform;
 pub mod render;
 pub mod runtime;
 pub mod window_lifecycle;
