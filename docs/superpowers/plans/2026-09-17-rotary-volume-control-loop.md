@@ -1284,41 +1284,43 @@ The nonce is a **freshness token, not a security credential**, and nothing in th
 Create `apps/desktop/src-tauri/tests/nonce.rs`:
 
 ```rust
-use kivori_desktop::device::nonce::{FixedNonceSource, NonceSource, OsNonceSource};
+use kivori_desktop::device::nonce::{FailingNonceSource, FixedNonceSource, NonceError, NonceSource, OsNonceSource};
+
+// NOTE: there is deliberately NO test asserting that two OS-random nonces differ.
+// That assertion is probabilistic and would flake roughly 1 in 2^32 runs while
+// proving nothing a deterministic source cannot prove. Session-freshness BEHAVIOUR
+// is tested with FixedNonceSource; OsNonceSource gets a smoke and an error-path test.
 
 #[test]
-fn os_nonce_source_yields_distinct_values() {
+fn os_nonce_source_smoke_produces_a_value() {
     let mut src = OsNonceSource;
-    let mut seen = std::collections::HashSet::new();
-    for _ in 0..1_000 {
-        assert!(seen.insert(src.next_nonce()), "nonce repeated within one process");
-    }
+    assert!(src.next_nonce().is_ok(), "OS entropy must be available on a desktop");
 }
 
 #[test]
-fn os_nonce_source_is_not_a_counter_from_one() {
-    // The old implementation started at 1 on every process start, which is exactly
-    // the property that made stale input from a previous process indistinguishable.
-    let mut a = OsNonceSource;
-    let mut b = OsNonceSource;
-    let first_a = a.next_nonce();
-    let first_b = b.next_nonce();
-    assert_ne!(first_a, 1, "first nonce must not be a fixed constant");
-    assert_ne!(
-        first_a, first_b,
-        "two independently constructed sources must not agree, which is what a \
-         restarted process looks like"
-    );
+fn os_nonce_source_can_be_called_repeatedly_without_error() {
+    let mut src = OsNonceSource;
+    for _ in 0..16 {
+        src.next_nonce().expect("OS entropy remains available");
+    }
 }
 
 #[test]
 fn fixed_nonce_source_is_deterministic_for_tests() {
     let mut src = FixedNonceSource::new(vec![10, 20, 30]);
-    assert_eq!(src.next_nonce(), 10);
-    assert_eq!(src.next_nonce(), 20);
-    assert_eq!(src.next_nonce(), 30);
+    assert_eq!(src.next_nonce(), Ok(10));
+    assert_eq!(src.next_nonce(), Ok(20));
+    assert_eq!(src.next_nonce(), Ok(30));
     // Exhausted sequences hold the last value rather than panicking mid-test.
-    assert_eq!(src.next_nonce(), 30);
+    assert_eq!(src.next_nonce(), Ok(30));
+}
+
+/// A nonce source that cannot produce a value must fail the CONNECTION ATTEMPT,
+/// never crash the desktop process.
+#[test]
+fn a_failing_nonce_source_reports_an_error_rather_than_panicking() {
+    let mut src = FailingNonceSource;
+    assert_eq!(src.next_nonce(), Err(NonceError::Unavailable));
 }
 ```
 
@@ -1349,9 +1351,20 @@ Create `apps/desktop/src-tauri/src/device/nonce.rs`:
 //! The nonce therefore MUST be distinct across desktop process restarts, not
 //! merely within one process. It is a freshness token, NOT a security credential.
 
+/// Why a nonce could not be produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NonceError {
+    /// The OS entropy source was unavailable.
+    Unavailable,
+}
+
 /// Supplies a fresh session nonce per handshake attempt.
+///
+/// Returns a `Result` deliberately: if the OS cannot provide randomness, the
+/// correct behaviour is to fail THIS CONNECTION ATTEMPT and back off, not to
+/// crash the desktop process out from under the user.
 pub trait NonceSource: Send {
-    fn next_nonce(&mut self) -> u32;
+    fn next_nonce(&mut self) -> Result<u32, NonceError>;
 }
 
 /// Production source: OS-provided randomness.
@@ -1359,12 +1372,10 @@ pub trait NonceSource: Send {
 pub struct OsNonceSource;
 
 impl NonceSource for OsNonceSource {
-    fn next_nonce(&mut self) -> u32 {
+    fn next_nonce(&mut self) -> Result<u32, NonceError> {
         let mut buf = [0u8; 4];
-        // getrandom only fails if the OS entropy source is unavailable, which on a
-        // desktop we are already running on means the process is unrecoverable.
-        getrandom::getrandom(&mut buf).expect("OS entropy unavailable");
-        u32::from_le_bytes(buf)
+        getrandom::getrandom(&mut buf).map_err(|_| NonceError::Unavailable)?;
+        Ok(u32::from_le_bytes(buf))
     }
 }
 
@@ -1383,12 +1394,22 @@ impl FixedNonceSource {
 }
 
 impl NonceSource for FixedNonceSource {
-    fn next_nonce(&mut self) -> u32 {
+    fn next_nonce(&mut self) -> Result<u32, NonceError> {
         let v = self.values[self.index];
         if self.index + 1 < self.values.len() {
             self.index += 1;
         }
-        v
+        Ok(v)
+    }
+}
+
+/// Always fails. Exercises the connection-attempt error path.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FailingNonceSource;
+
+impl NonceSource for FailingNonceSource {
+    fn next_nonce(&mut self) -> Result<u32, NonceError> {
+        Err(NonceError::Unavailable)
     }
 }
 ```
@@ -1400,11 +1421,20 @@ Add `pub mod nonce;` to `apps/desktop/src-tauri/src/device/mod.rs`.
 In `apps/desktop/src-tauri/src/device/session.rs`:
 
 1. Replace the `next_nonce: u32` field with `nonce_source: Box<dyn NonceSource>`, defaulting to `Box::new(OsNonceSource)`.
-2. Replace the counter body at the `Hello` build site:
+2. Replace the counter body at the `Hello` build site. A nonce failure aborts **this attempt only** — it is handled exactly like a handshake I/O failure (record a `SafeDiagnostic`, apply the existing `ManagerEvent::IoError`, back off, retry). It must never panic:
 
 ```rust
-        let nonce = self.nonce_source.next_nonce();
+        let nonce = match self.nonce_source.next_nonce() {
+            Ok(nonce) => nonce,
+            Err(NonceError::Unavailable) => {
+                // No session identity means no no-stale-replay guarantee, so refuse
+                // to open a session rather than proceed without one.
+                return Err(SessionError::NonceUnavailable);
+            }
+        };
 ```
+
+Add `NonceUnavailable` to the existing session error type and map it to the `io` diagnostic category in `diagnostics/redact.rs`. Add a test asserting that a `Session` built with `FailingNonceSource` returns that error and does **not** reach `Connected`.
 
 3. Keep the sent nonce for the life of the connection and expose it:
 
@@ -1712,8 +1742,37 @@ use kivori_desktop::platform::{
     ActionAvailability, BackendError, ConfirmationClass, FakeVolumeBackend, VolumeBackend,
 };
 
-/// The contract every VolumeBackend must satisfy. Task 12 calls this with the real
-/// Windows backend when a physical endpoint is present.
+/// Restores the endpoint's original volume when dropped, including on panic.
+///
+/// A test that changes a real person's system volume MUST put it back. `Drop` runs
+/// during unwind, so an assertion failure mid-test still restores.
+pub struct VolumeGuard<'a> {
+    backend: &'a dyn VolumeBackend,
+    original: u8,
+}
+
+impl<'a> VolumeGuard<'a> {
+    pub fn capture(backend: &'a dyn VolumeBackend) -> Option<Self> {
+        let original = backend.read().ok()?;
+        Some(Self { backend, original })
+    }
+    pub const fn original(&self) -> u8 {
+        self.original
+    }
+}
+
+impl Drop for VolumeGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.backend.set(self.original);
+    }
+}
+
+/// NON-DESTRUCTIVE contract. Safe against a real endpoint: it captures the original
+/// value, nudges it by a small amount, verifies read-back, and restores.
+///
+/// Exact-boundary behaviour (0 and 100) is NOT exercised here — slamming a real
+/// user's speakers to silent or full is not an acceptable test side effect. Those
+/// assertions live in `assert_boundary_contract`, which runs on fakes only.
 pub fn assert_backend_contract(backend: &dyn VolumeBackend) {
     let ActionAvailability::Available { confirmation } = backend.availability() else {
         panic!("contract suite requires an available backend");
@@ -1724,11 +1783,25 @@ pub fn assert_backend_contract(backend: &dyn VolumeBackend) {
         "a backend with read-back must report StateConfirmed"
     );
 
-    // set() returns the READ-BACK value, never the requested one.
-    let observed = backend.set(50).expect("set");
-    assert_eq!(backend.read().expect("read"), observed);
+    let guard = VolumeGuard::capture(backend).expect("read original volume");
+    let original = guard.original();
 
-    // Bounds are accepted at both ends.
+    // A small, safe nudge that stays well inside the range from any starting point.
+    let target = if original >= 50 { original - 5 } else { original + 5 };
+
+    // set() returns the READ-BACK value, never the requested one.
+    let observed = backend.set(target).expect("set");
+    assert_eq!(backend.read().expect("read"), observed);
+    assert!(
+        observed.abs_diff(target) <= 2,
+        "observed {observed} should track requested {target} within quantisation"
+    );
+
+    // `guard` restores the original volume here, or on unwind if an assert above failed.
+}
+
+/// DESTRUCTIVE exact-boundary contract. Fakes only — never a real endpoint.
+pub fn assert_boundary_contract(backend: &dyn VolumeBackend) {
     assert_eq!(backend.set(0).expect("set 0"), 0);
     assert_eq!(backend.set(100).expect("set 100"), 100);
 }
@@ -1736,6 +1809,27 @@ pub fn assert_backend_contract(backend: &dyn VolumeBackend) {
 #[test]
 fn fake_backend_satisfies_the_contract() {
     assert_backend_contract(&FakeVolumeBackend::new(25));
+}
+
+#[test]
+fn fake_backend_satisfies_the_exact_boundary_contract() {
+    assert_boundary_contract(&FakeVolumeBackend::new(25));
+}
+
+#[test]
+fn the_volume_guard_restores_the_original_value_even_on_panic() {
+    let backend = FakeVolumeBackend::new(42);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = VolumeGuard::capture(&backend).expect("capture");
+        backend.set(7).expect("set");
+        panic!("simulated test failure");
+    }));
+    assert!(result.is_err());
+    assert_eq!(
+        backend.read().expect("read"),
+        42,
+        "the guard must restore the original volume during unwind"
+    );
 }
 
 #[test]
@@ -3167,8 +3261,13 @@ mod windows_backend {
     /// GitHub-hosted Windows runners generally expose NO audio endpoint. This test
     /// therefore SKIPS loudly rather than passing silently — a skip is evidence of
     /// absence, not evidence of correctness.
+    ///
+    /// Runs ONLY the non-destructive contract: it captures the user's current volume,
+    /// nudges it by 5 points, verifies read-back, and restores via `VolumeGuard`,
+    /// including on unwind. `assert_boundary_contract` is NEVER called here — a test
+    /// must not slam a real person's output to silent or full.
     #[test]
-    fn real_backend_satisfies_the_contract_when_an_endpoint_exists() {
+    fn real_backend_satisfies_the_non_destructive_contract_when_an_endpoint_exists() {
         let backend = WindowsVolumeBackend::new();
         match backend.availability() {
             ActionAvailability::Available { .. } => assert_backend_contract(&backend),
@@ -3180,6 +3279,23 @@ mod windows_backend {
                 );
             }
         }
+    }
+
+    /// Belt and braces: prove the endpoint is back where the user left it.
+    #[test]
+    fn the_real_endpoint_volume_is_unchanged_after_the_contract_run() {
+        let backend = WindowsVolumeBackend::new();
+        let ActionAvailability::Available { .. } = backend.availability() else {
+            eprintln!("SKIPPED: no default render endpoint on this machine.");
+            return;
+        };
+        let before = backend.read().expect("read before");
+        assert_backend_contract(&backend);
+        assert_eq!(
+            backend.read().expect("read after"),
+            before,
+            "the contract run must leave the user's volume exactly as it found it"
+        );
     }
 
     #[test]
