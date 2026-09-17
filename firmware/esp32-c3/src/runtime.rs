@@ -10,8 +10,9 @@
 //!
 //! 1. finish boot once — `booting` → `offline`, the device-originated transition (FR-014/015);
 //! 2. drain inbound bytes through the real decoder, sequence policy, and [`Dispatcher`], which answers
-//!    `Hello`/`Ping`/`SetState` and drops malformed frames without side effects (SC-008); a session-ending
-//!    `Bye` also resets the rotary decoder/gesture state so no gesture survives into a new session;
+//!    `Hello`/`Ping`/`SetState` and drops malformed frames without side effects (SC-008); any session
+//!    boundary — `Bye`, a transport failure, or a fresh `Hello` with no prior `Bye` — also resets the
+//!    rotary decoder/gesture state so no gesture survives into a new (or recovered) session;
 //! 3. sample physical input once, decode validated detents, and emit semantic `InputEvent`s — gated by
 //!    the negotiated `PHYSICAL_INPUT_V1` capability and an accepted session inside the dispatcher;
 //! 4. render the current state through the shared renderer, flushing only changed tiles (FR-013);
@@ -198,10 +199,15 @@ impl Runtime {
         {
             let _ = self.device.apply(DeviceEvent::LinkDown);
             self.dispatcher.note_diagnostic(DeviceDiagnostic::LinkLost);
+            // A transport failure is a session boundary too, even with no `Bye`: clear the
+            // accepted session/negotiated capability so a stale gesture cannot keep emitting
+            // once the link recovers.
+            self.dispatcher.link_lost();
             tick.link_dropped = true;
         }
-        // A `Bye` this poll closed the session: a gesture (or partial motion) from the old
-        // session must never complete in a new one (no-stale-replay invariant).
+        // A `Bye`, a transport failure, or a new `Hello` this poll closed/opened a session: a
+        // gesture (or partial motion) from the old session must never complete in a new one
+        // (no-stale-replay invariant).
         if self.dispatcher.take_session_ended() {
             self.decoder.reset();
             self.gesture.reset();

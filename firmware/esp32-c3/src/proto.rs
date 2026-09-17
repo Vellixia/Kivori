@@ -61,9 +61,10 @@ pub struct Dispatcher {
     /// The capability set negotiated for the current session (set from `Ready`; the protocol
     /// crate itself is capability-blind, so this is the dispatcher's own gate).
     negotiated_caps: Capabilities,
-    /// Set when `Bye` just closed the session, so the caller can reset any input state (the
-    /// decoder/gesture layers) that must not survive a session boundary. Single-slot, like
-    /// `pending`: consumed once via [`Self::take_session_ended`].
+    /// Set when a session boundary just occurred — `Bye`, a transport failure ([`Self::link_lost`]),
+    /// or a new `Hello` (a reconnect that never sent `Bye`) — so the caller can reset any input
+    /// state (the decoder/gesture layers) that must not survive it. Single-slot, like `pending`:
+    /// consumed once via [`Self::take_session_ended`].
     session_ended: bool,
 }
 
@@ -157,10 +158,24 @@ impl Dispatcher {
         self.pending = Some(diagnostic);
     }
 
-    /// Takes the "a session just ended" flag, if set. `true` at most once per `Bye`, so the
-    /// caller can reset session-scoped input state exactly once per boundary.
+    /// Takes the "a session boundary just occurred" flag, if set (`Bye`, link loss, or a new
+    /// `Hello`), so the caller can reset session-scoped input state exactly once per boundary.
     pub fn take_session_ended(&mut self) -> bool {
         core::mem::take(&mut self.session_ended)
+    }
+
+    /// Clears session state after a transport failure, exactly like `Bye` minus the diagnostic
+    /// (the caller already reports its own `LinkLost`/failure diagnostic for a transport error).
+    ///
+    /// Without this, a link drop that is never followed by an explicit `Bye` (e.g. a desktop
+    /// crash or a yanked cable) would leave `accepted_session`/`negotiated_caps` — and therefore
+    /// the caller's decoder/gesture state — exactly as they were, letting a gesture opened before
+    /// the drop keep emitting under the stale session once the link recovers.
+    pub fn link_lost(&mut self) {
+        self.tracker = SequenceTracker::new();
+        self.accepted_session = None;
+        self.negotiated_caps = Capabilities::NONE;
+        self.session_ended = true;
     }
 
     /// Encodes and writes a device-originated message (`Health`, `Diagnostic`) on the session's sequence.
@@ -267,12 +282,21 @@ impl Dispatcher {
                 };
                 self.send(transport, &Message::HelloAck(ack))?;
                 self.hello_acks = self.hello_acks.saturating_add(1);
+                // A new `Hello` always starts a fresh session, whether or not the previous one
+                // ended with a `Bye` (a reconnect after a desktop crash never sends one). Flag the
+                // boundary BEFORE recording the new nonce, so the caller resets input state (a
+                // gesture from the old session must never complete in the new one) even when no
+                // `Bye` was ever seen.
+                self.session_ended = true;
                 self.accepted_session = Some(hello.nonce);
             }
             Message::Ready(ready) => {
-                // The desktop's own capability intersection; the dispatcher trusts it as the
-                // negotiated set (`negotiate` already ran on the desktop side of this handshake).
-                self.negotiated_caps = ready.negotiated_caps;
+                // Intersect with what the device itself advertised: the desktop's `Ready` is
+                // untrusted input, and an unnegotiated (or never-advertised) capability MUST NOT
+                // activate behavior even if a buggy or hostile peer claims otherwise.
+                self.negotiated_caps = ready
+                    .negotiated_caps
+                    .intersection(self.identity.capabilities);
             }
             Message::SetState(set) => {
                 if let Some(now) = device.apply(DeviceEvent::SetState(set.desired)) {

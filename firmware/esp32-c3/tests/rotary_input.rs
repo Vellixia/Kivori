@@ -380,8 +380,8 @@ use kivori_firmware::sim::{handshaken_dispatcher as handshaken, SimPipe};
 use kivori_firmware::state::DeviceState;
 use kivori_model::{Capabilities, ProtocolVersion};
 use kivori_protocol::{
-    decode_message, encode_message, ControlId, FirmwareVersion, Hello, InputKind, Message, Ready,
-    MAX_FRAME, MAX_WIRE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
+    decode_message, encode_message, ControlId, FirmwareVersion, Hello, InputKind, Message, Nonce,
+    Ready, MAX_FRAME, MAX_WIRE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
 };
 
 fn gating_identity() -> DeviceIdentity {
@@ -503,15 +503,123 @@ fn send_input_event_emits_on_the_wire_once_negotiated_and_accepted() {
     }
 }
 
+#[test]
+fn send_input_event_is_inert_when_the_desktop_over_claims_a_capability_the_device_never_advertised()
+{
+    // The device itself never advertises PHYSICAL_INPUT_V1 (capabilities: NONE), but a buggy or
+    // hostile desktop sends `Ready` claiming it anyway. The dispatcher must intersect with what
+    // the device actually advertised, not trust the desktop's claim verbatim — an unnegotiated
+    // capability MUST NOT activate behavior.
+    let mut pipe = SimPipe::new();
+    let mut device = DeviceState::new();
+    let mut dispatcher = Dispatcher::new(DeviceIdentity {
+        device_id: [0xEF; 16],
+        firmware_version: FirmwareVersion {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
+        capabilities: Capabilities::NONE,
+    });
+
+    gating_host_write(
+        &mut pipe,
+        &Message::Hello(Hello {
+            desktop_version: FirmwareVersion {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            desktop_caps: Capabilities::PHYSICAL_INPUT_V1,
+            nonce: 0xC0FF_EE00,
+        }),
+        0,
+    );
+    dispatcher.poll(&mut pipe, &mut device, 0).expect("poll");
+    let _ = pipe.host_recv();
+
+    gating_host_write(
+        &mut pipe,
+        &Message::Ready(Ready {
+            negotiated_minor: 0,
+            // Over-claims a capability the device never advertised.
+            negotiated_caps: Capabilities::PHYSICAL_INPUT_V1,
+        }),
+        1,
+    );
+    dispatcher.poll(&mut pipe, &mut device, 0).expect("poll");
+
+    let sent = dispatcher.send_input_event(&mut pipe, 1, InputKind::GestureStarted, 0);
+    assert!(
+        !sent,
+        "a capability the device never advertised must not activate, even if the desktop claims it"
+    );
+    assert!(gating_host_drain(&mut pipe).is_empty());
+}
+
 // --- session-boundary reset (controller decision 4): a gesture opened in one session must not
 // be completable, or silently continued, in the next one. Exercised through the real `Runtime`
 // (not just the decoder/gesture types directly), since the reset is wired in `Runtime::step`.
 
+use core::cell::Cell;
 use kivori_asset_compiler::compile_default_blob;
 use kivori_assets::AssetBlob;
+use kivori_firmware::ports::Transport;
 use kivori_firmware::runtime::{Runtime, RuntimeConfig};
 use kivori_firmware::sim::{CaptureDisplay, VirtualClock};
 use kivori_protocol::{Bye, ByeReason};
+
+/// Asserts every `InputEvent` in `events` carries exactly `session`, and that no `Detent` or
+/// `GestureEnded` for a gesture appears before that gesture's `GestureStarted` — i.e. the stream
+/// never continues a gesture silently (no stale-or-mismatched session nonce, no orphaned detent).
+fn assert_clean_input_stream(events: &[Message], session: Nonce) {
+    use std::collections::HashSet;
+    let mut started: HashSet<u16> = HashSet::new();
+    for m in events {
+        let Message::InputEvent(event) = m else {
+            continue;
+        };
+        assert_eq!(
+            event.session, session,
+            "an InputEvent carried the wrong/stale session nonce"
+        );
+        match event.kind {
+            InputKind::GestureStarted => {
+                started.insert(event.gesture_id);
+            }
+            InputKind::Detent(_) | InputKind::GestureEnded => {
+                assert!(
+                    started.contains(&event.gesture_id),
+                    "gesture {} produced a Detent/GestureEnded with no preceding GestureStarted",
+                    event.gesture_id
+                );
+            }
+        }
+    }
+}
+
+/// Wraps a `SimPipe`, failing the next `read` exactly once when armed via `fail_next_read`. Lets a
+/// host-sim test exercise a genuine transport failure — `SimPipe` itself is `Infallible` and can
+/// never fail on its own.
+struct FlakyTransport<'p> {
+    inner: &'p mut SimPipe,
+    fail_next_read: &'p Cell<bool>,
+}
+
+impl Transport for FlakyTransport<'_> {
+    type Error = ();
+
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        if self.fail_next_read.replace(false) {
+            return Err(());
+        }
+        self.inner.read(buf).map_err(|_| ())
+    }
+
+    fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        self.inner.write(buf).map_err(|_| ())
+    }
+}
 
 /// One full CW detent cycle as a level script: 00 -> 01 -> 11 -> 10 -> 00.
 fn cw_cycle_levels() -> Vec<InputLevels> {
@@ -635,5 +743,303 @@ fn a_gesture_open_before_bye_cannot_be_silently_continued_after_reconnecting() {
         opened_fresh_in_b,
         "a fresh GestureStarted must fire in session B; the old session's open gesture must not \
          silently continue across the boundary"
+    );
+}
+
+#[test]
+fn a_gesture_open_on_reconnect_without_bye_cannot_be_silently_continued() {
+    // Variant of the test above with NO `Bye` at all — the common real-world case (a desktop
+    // crash or a force-quit never sends one). A bare new `Hello` must still reset the input state.
+    let mut runtime = Runtime::new(gating_identity(), RuntimeConfig::default());
+    let clock = VirtualClock::new();
+    let mut pipe = SimPipe::new();
+    let mut display = CaptureDisplay::new();
+    let blob_bytes = compile_default_blob();
+    let blob = AssetBlob::parse(&blob_bytes).expect("valid blob");
+    let mut idle = ScriptedInput::new(vec![lv(false, false)]);
+
+    // Session A: handshake, negotiating PHYSICAL_INPUT_V1.
+    gating_host_write(
+        &mut pipe,
+        &Message::Hello(Hello {
+            desktop_version: FirmwareVersion {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            desktop_caps: Capabilities::PHYSICAL_INPUT_V1,
+            nonce: 0xA000_0003,
+        }),
+        0,
+    );
+    runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
+    gating_host_write(
+        &mut pipe,
+        &Message::Ready(Ready {
+            negotiated_minor: 0,
+            negotiated_caps: Capabilities::PHYSICAL_INPUT_V1,
+        }),
+        1,
+    );
+    runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
+    let _ = pipe.host_recv();
+
+    // One full CW detent opens gesture 1 in session A, left open (well inside the 250ms window).
+    let mut cw = ScriptedInput::new(cw_cycle_levels());
+    for _ in 0..5 {
+        clock.advance(1);
+        runtime.step(&clock, &mut pipe, &mut cw, &mut display, &blob);
+    }
+    let events_a = gating_host_drain(&mut pipe);
+    assert_clean_input_stream(&events_a, 0xA000_0003);
+    assert!(
+        events_a.iter().any(|m| matches!(
+            m,
+            Message::InputEvent(e) if matches!(e.kind, InputKind::GestureStarted)
+        )),
+        "the first detent must open a gesture in session A"
+    );
+
+    // NO `Bye`. The desktop just reconnects: a bare Hello -> Ready for session B.
+    gating_host_write(
+        &mut pipe,
+        &Message::Hello(Hello {
+            desktop_version: FirmwareVersion {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            desktop_caps: Capabilities::PHYSICAL_INPUT_V1,
+            nonce: 0xB000_0004,
+        }),
+        2,
+    );
+    runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
+    gating_host_write(
+        &mut pipe,
+        &Message::Ready(Ready {
+            negotiated_minor: 0,
+            negotiated_caps: Capabilities::PHYSICAL_INPUT_V1,
+        }),
+        3,
+    );
+    runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
+    let _ = pipe.host_recv();
+
+    // A second full CW detent in session B. Without resetting on a bare `Hello`, the old open
+    // gesture would silently continue (no `GestureStarted`) and its events would still be stamped
+    // with session A's nonce even though the dispatcher has already moved on to session B.
+    let mut cw2 = ScriptedInput::new(cw_cycle_levels());
+    for _ in 0..5 {
+        clock.advance(1);
+        runtime.step(&clock, &mut pipe, &mut cw2, &mut display, &blob);
+    }
+    let events_b = gating_host_drain(&mut pipe);
+    assert_clean_input_stream(&events_b, 0xB000_0004);
+    assert!(
+        events_b.iter().any(|m| matches!(
+            m,
+            Message::InputEvent(e) if matches!(e.kind, InputKind::GestureStarted)
+        )),
+        "a fresh GestureStarted must fire in session B even though no Bye was ever sent"
+    );
+}
+
+#[test]
+fn a_gesture_open_before_link_loss_cannot_be_silently_continued_after_reconnecting() {
+    // A transport failure with no `Bye` at all (a yanked cable, not a clean shutdown) must reset
+    // input state exactly like `Bye` does.
+    let mut runtime = Runtime::new(gating_identity(), RuntimeConfig::default());
+    let clock = VirtualClock::new();
+    let mut pipe = SimPipe::new();
+    let mut display = CaptureDisplay::new();
+    let blob_bytes = compile_default_blob();
+    let blob = AssetBlob::parse(&blob_bytes).expect("valid blob");
+    let mut idle = ScriptedInput::new(vec![lv(false, false)]);
+    let fail_next_read = Cell::new(false);
+
+    // Session A: handshake, negotiating PHYSICAL_INPUT_V1.
+    gating_host_write(
+        &mut pipe,
+        &Message::Hello(Hello {
+            desktop_version: FirmwareVersion {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            desktop_caps: Capabilities::PHYSICAL_INPUT_V1,
+            nonce: 0xA000_0005,
+        }),
+        0,
+    );
+    runtime.step(
+        &clock,
+        &mut FlakyTransport {
+            inner: &mut pipe,
+            fail_next_read: &fail_next_read,
+        },
+        &mut idle,
+        &mut display,
+        &blob,
+    );
+    gating_host_write(
+        &mut pipe,
+        &Message::Ready(Ready {
+            negotiated_minor: 0,
+            negotiated_caps: Capabilities::PHYSICAL_INPUT_V1,
+        }),
+        1,
+    );
+    runtime.step(
+        &clock,
+        &mut FlakyTransport {
+            inner: &mut pipe,
+            fail_next_read: &fail_next_read,
+        },
+        &mut idle,
+        &mut display,
+        &blob,
+    );
+    let _ = pipe.host_recv();
+
+    // One full CW detent opens gesture 1 in session A, left open.
+    let mut cw = ScriptedInput::new(cw_cycle_levels());
+    for _ in 0..5 {
+        clock.advance(1);
+        runtime.step(
+            &clock,
+            &mut FlakyTransport {
+                inner: &mut pipe,
+                fail_next_read: &fail_next_read,
+            },
+            &mut cw,
+            &mut display,
+            &blob,
+        );
+    }
+    let events_a = gating_host_drain(&mut pipe);
+    assert_clean_input_stream(&events_a, 0xA000_0005);
+    assert!(
+        events_a.iter().any(|m| matches!(
+            m,
+            Message::InputEvent(e) if matches!(e.kind, InputKind::GestureStarted)
+        )),
+        "the first detent must open a gesture in session A"
+    );
+
+    // Force a single transport read failure: a genuine link loss, with no `Bye` ever sent.
+    fail_next_read.set(true);
+    let tick = runtime.step(
+        &clock,
+        &mut FlakyTransport {
+            inner: &mut pipe,
+            fail_next_read: &fail_next_read,
+        },
+        &mut idle,
+        &mut display,
+        &blob,
+    );
+    assert!(
+        tick.link_dropped,
+        "the forced read failure must be observed as a dropped link"
+    );
+    let _ = pipe.host_recv();
+
+    // Quiet period, deliberately with NO new `Hello` yet: advance well past the 250ms gesture
+    // window on idle input alone. This isolates `link_lost()`'s own effect from the (separate)
+    // reset a fresh `Hello` performs — without `link_lost()` clearing `accepted_session` and
+    // resetting the gesture, the still-open gesture from session A would time out here and its
+    // `GestureEnded` would reach the wire under session A's nonce, with no reconnect in sight.
+    for _ in 0..300 {
+        clock.advance(1);
+        runtime.step(
+            &clock,
+            &mut FlakyTransport {
+                inner: &mut pipe,
+                fail_next_read: &fail_next_read,
+            },
+            &mut idle,
+            &mut display,
+            &blob,
+        );
+    }
+    let events_quiet = gating_host_drain(&mut pipe);
+    assert!(
+        !events_quiet
+            .iter()
+            .any(|m| matches!(m, Message::InputEvent(_))),
+        "no InputEvent may reach the wire after a link loss until a new session is established; \
+         got {events_quiet:?}"
+    );
+
+    // Session B: reconnect once the link recovers.
+    gating_host_write(
+        &mut pipe,
+        &Message::Hello(Hello {
+            desktop_version: FirmwareVersion {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            desktop_caps: Capabilities::PHYSICAL_INPUT_V1,
+            nonce: 0xB000_0006,
+        }),
+        2,
+    );
+    runtime.step(
+        &clock,
+        &mut FlakyTransport {
+            inner: &mut pipe,
+            fail_next_read: &fail_next_read,
+        },
+        &mut idle,
+        &mut display,
+        &blob,
+    );
+    gating_host_write(
+        &mut pipe,
+        &Message::Ready(Ready {
+            negotiated_minor: 0,
+            negotiated_caps: Capabilities::PHYSICAL_INPUT_V1,
+        }),
+        3,
+    );
+    runtime.step(
+        &clock,
+        &mut FlakyTransport {
+            inner: &mut pipe,
+            fail_next_read: &fail_next_read,
+        },
+        &mut idle,
+        &mut display,
+        &blob,
+    );
+    let _ = pipe.host_recv();
+
+    // A second full CW detent in session B. Without resetting on link loss, the old open gesture
+    // would silently continue, stamped with the wrong (session A) nonce.
+    let mut cw2 = ScriptedInput::new(cw_cycle_levels());
+    for _ in 0..5 {
+        clock.advance(1);
+        runtime.step(
+            &clock,
+            &mut FlakyTransport {
+                inner: &mut pipe,
+                fail_next_read: &fail_next_read,
+            },
+            &mut cw2,
+            &mut display,
+            &blob,
+        );
+    }
+    let events_b = gating_host_drain(&mut pipe);
+    assert_clean_input_stream(&events_b, 0xB000_0006);
+    assert!(
+        events_b.iter().any(|m| matches!(
+            m,
+            Message::InputEvent(e) if matches!(e.kind, InputKind::GestureStarted)
+        )),
+        "a fresh GestureStarted must fire in session B; a link loss with no Bye must still reset \
+         input state"
     );
 }
