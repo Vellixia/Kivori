@@ -370,3 +370,85 @@ impl Session {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! `HandshakeOutcome::Incompatible` from `evaluate_hello_ack` can never actually be produced
+    //! through the wire path: `decode_message` (see `handle`, above) already gates every inbound
+    //! frame on `self.config.supported_majors` — the exact same list `evaluate_hello_ack` checks —
+    //! before `handle_message` ever runs. A frame whose major would trigger `Incompatible` here is
+    //! rejected earlier as `ProtoError::UnsupportedVersion` and handled by the *other*,
+    //! frame-level incompatible path in `handle()` instead. This is a structural fact of the
+    //! existing dual-gate design, not something introduced here — no test built on `Session`'s
+    //! public wire API (`open`/`pump`) can reach this branch, confirmed empirically. This unit
+    //! test exercises the private `handle_message` directly (module-private access) so the
+    //! `current_session` invariant is still proven at the point that decides it.
+
+    use super::*;
+    use crate::device::nonce::FixedNonceSource;
+    use kivori_protocol::HelloAck;
+
+    struct NullLink;
+
+    impl SerialLink for NullLink {
+        type Error = std::convert::Infallible;
+
+        fn read(&mut self, _buf: &mut [u8]) -> Result<usize, Self::Error> {
+            Ok(0)
+        }
+
+        fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+            Ok(buf.len())
+        }
+    }
+
+    #[test]
+    fn handle_message_clears_current_session_on_incompatible_outcome() {
+        let mut session = Session::with_nonce_source(
+            SessionConfig::default(),
+            Box::new(FixedNonceSource::new(vec![7])),
+        );
+        // Simulate an already-accepted session: a Hello was sent and its nonce is the live
+        // session identity (exactly the state `Compatible` leaves behind).
+        session.sent_hello = Some(build_hello(
+            session.config.app_version,
+            session.config.capabilities,
+            7,
+        ));
+        session.current_session = Some(7);
+
+        let ack = HelloAck {
+            device_caps: Capabilities::NONE,
+            device_id: [0u8; 16],
+            firmware_version: FirmwareVersion {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            nonce_echo: 7, // correct nonce: evaluate_hello_ack must not short-circuit to BadNonce
+        };
+        // Not in `SessionConfig::default()`'s `supported_majors` (`[PROTOCOL_MAJOR]`) — only
+        // reachable by calling `handle_message` directly, since `decode_message` would reject a
+        // real wire frame at this major before `handle_message` ever saw it.
+        let incompatible_version = ProtocolVersion::new(99, 0);
+
+        let mut link = NullLink;
+        let mut manager = ConnectionManager::new();
+        let mut orchestrator = Orchestrator::new();
+
+        session
+            .handle_message(
+                incompatible_version,
+                Message::HelloAck(ack),
+                &mut link,
+                &mut manager,
+                &mut orchestrator,
+            )
+            .expect("handle_message");
+
+        assert_eq!(
+            session.current_session, None,
+            "an Incompatible handshake outcome must clear the live session identity"
+        );
+    }
+}

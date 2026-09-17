@@ -400,3 +400,66 @@ fn current_session_is_cleared_when_the_link_fails() {
         "an I/O failure must not leave a stale session identity behind"
     );
 }
+
+/// `sent_hello` is not cleared after acceptance (pre-existing Feature 001 behaviour, out of scope
+/// here), so an already-`Connected` session still evaluates a later stray/duplicate `HelloAck`
+/// frame. A frame at an unsupported major is intercepted by `decode_message`'s own gate before it
+/// ever reaches `evaluate_hello_ack` — both check the identical `supported_majors` list — so this
+/// is a frame-level incompatibility, not a `HandshakeOutcome::Incompatible` from the handshake
+/// evaluation. The FSM has no legal `Connected -> Incompatible` transition (only
+/// `Connecting -> Incompatible`), so the manager stays `Connected` and the stray frame is
+/// effectively dropped: the live session identity must survive it.
+///
+/// (`HandshakeOutcome::Incompatible`'s own `current_session = None`, in `handle_message`, is
+/// therefore unreachable through `Session`'s public wire path for any `SessionConfig` — confirmed
+/// empirically while writing this test. It is covered directly, at the unit that decides it, by
+/// `handle_message_clears_current_session_on_incompatible_outcome` in `src/device/session.rs`.)
+#[test]
+fn a_stray_unsupported_major_frame_after_connect_is_dropped_and_session_identity_survives() {
+    let (mut link, mut session, mut manager, mut orch) = connect(SendableState::Idle);
+    assert_eq!(manager.state(), ConnectionState::Connected);
+    let nonce = session
+        .current_session()
+        .expect("a connected session has a current nonce");
+
+    // A stray frame at an unsupported major — `decode_message` rejects it before any handshake
+    // re-evaluation happens.
+    device_push(&mut link, &device_ack(nonce), ProtocolVersion::new(2, 0), 1);
+    session
+        .pump(&mut link, &mut manager, &mut orch)
+        .expect("pump survives the frame it cannot decode for this session");
+
+    assert_eq!(
+        manager.state(),
+        ConnectionState::Connected,
+        "no legal Connected -> Incompatible transition exists; the frame is dropped"
+    );
+    assert_eq!(
+        session.current_session(),
+        Some(nonce),
+        "a dropped frame must not disturb the live session identity"
+    );
+}
+
+/// Unlike an unsupported major, a bad nonce is NOT caught by `decode_message` (which only checks
+/// the protocol major) — the frame decodes fine and reaches `evaluate_hello_ack`, so this exercises
+/// the real `BadNonce` clearing site (`session.rs`, `HandshakeOutcome::BadNonce`) through the
+/// public wire path.
+#[test]
+fn current_session_is_cleared_by_a_stray_bad_nonce_hello_ack_after_connect() {
+    let (mut link, mut session, mut manager, mut orch) = connect(SendableState::Idle);
+    assert_eq!(manager.state(), ConnectionState::Connected);
+    assert!(session.current_session().is_some());
+
+    // A stray HelloAck echoing the wrong nonce (it can never match the original Hello's nonce).
+    device_push(&mut link, &device_ack(0xBAD_BAD), wire_version(), 1);
+    session
+        .pump(&mut link, &mut manager, &mut orch)
+        .expect("pump");
+
+    assert_eq!(
+        session.current_session(),
+        None,
+        "a stray bad-nonce HelloAck must clear the live session identity"
+    );
+}
