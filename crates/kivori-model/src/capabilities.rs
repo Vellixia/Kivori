@@ -1,9 +1,10 @@
 //! Capability bitset for additive, minor-version feature negotiation (data-model §3).
 //!
-//! No concrete capability flags are defined yet — they are introduced with the protocol phase. The
-//! representation is an opaque `u32` bitset; unknown/higher bits are preserved and ignored by older
-//! peers (append-only forward-compatibility). The key negotiation operation is [`Capabilities::
-//! intersection`] (features advertised by both peers).
+//! Concrete capability flags are allocated centrally as associated constants below (see the bit
+//! registry comment in `impl Capabilities`) and never reused once retired. The representation is an
+//! opaque `u32` bitset; unknown/higher bits are preserved and ignored by older peers (append-only
+//! forward-compatibility). The key negotiation operation is [`Capabilities::intersection`] (features
+//! advertised by both peers).
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +15,16 @@ pub struct Capabilities(u32);
 impl Capabilities {
     /// The empty capability set.
     pub const NONE: Capabilities = Capabilities(0);
+
+    // CAPABILITY BIT REGISTRY — allocate centrally, never reuse a retired bit.
+    //   bit 0  PHYSICAL_INPUT_V1  Slice 002
+    //   bit 1  PRESENTATION_V1    Slice 002
+
+    /// Bit 0 — the device may emit `InputEvent` (Slice 002, rotary input).
+    pub const PHYSICAL_INPUT_V1: Capabilities = Capabilities(1 << 0);
+
+    /// Bit 1 — the device renders semantic `Presentation` (Slice 002).
+    pub const PRESENTATION_V1: Capabilities = Capabilities(1 << 1);
 
     /// Creates a capability set from a raw bitmask.
     #[must_use]
