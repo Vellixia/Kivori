@@ -15,6 +15,7 @@ pub mod capabilities;
 pub mod color;
 pub mod connection;
 pub mod geometry;
+pub mod input;
 pub mod profile;
 pub mod scene;
 pub mod state;
