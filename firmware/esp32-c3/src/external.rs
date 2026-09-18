@@ -83,6 +83,8 @@ fn kind_name(message: &Message) -> &'static str {
         Message::Health(_) => "Health",
         Message::Diagnostic(_) => "Diagnostic",
         Message::Error(_) => "Error",
+        Message::InputEvent(_) => "InputEvent",
+        Message::Presentation(_) => "Presentation",
     }
 }
 
