@@ -1043,3 +1043,84 @@ fn a_gesture_open_before_link_loss_cannot_be_silently_continued_after_reconnecti
          input state"
     );
 }
+
+use kivori_model::presentation::{PrimaryState, ValueConfidence, ValueDisplay, ValueKind};
+use kivori_protocol::message::Presentation;
+
+fn pres(session: u32, revision: u32, percent: u8, transient_ms: u16) -> Presentation {
+    Presentation {
+        session,
+        revision,
+        primary: PrimaryState::Idle,
+        value: Some(ValueDisplay {
+            kind: ValueKind::Volume,
+            current_percent: percent,
+            confidence: ValueConfidence::Confirmed,
+            at_boundary: false,
+        }),
+        transient_ms,
+    }
+}
+
+#[test]
+fn a_newer_revision_is_accepted_and_an_older_one_is_dropped() {
+    let mut state = kivori_firmware::runtime::PresentationState::new();
+    state.begin_session(0xAAAA);
+
+    assert!(state.apply(&pres(0xAAAA, 5, 50, 800), 1_000));
+    assert!(
+        !state.apply(&pres(0xAAAA, 4, 10, 800), 1_010),
+        "older revision"
+    );
+    assert!(
+        !state.apply(&pres(0xAAAA, 5, 10, 800), 1_020),
+        "same revision"
+    );
+    assert!(state.apply(&pres(0xAAAA, 6, 60, 800), 1_030));
+}
+
+#[test]
+fn a_presentation_from_another_session_is_dropped() {
+    let mut state = kivori_firmware::runtime::PresentationState::new();
+    state.begin_session(0xAAAA);
+    assert!(state.apply(&pres(0xAAAA, 5, 50, 800), 1_000));
+    assert!(
+        !state.apply(&pres(0xBBBB, 900, 10, 800), 1_010),
+        "a stale high-revision presentation from a previous session must not render"
+    );
+}
+
+#[test]
+fn a_new_session_accepts_revision_one_again() {
+    let mut state = kivori_firmware::runtime::PresentationState::new();
+    state.begin_session(0xAAAA);
+    assert!(state.apply(&pres(0xAAAA, 743, 50, 800), 1_000));
+
+    state.begin_session(0xBBBB);
+    assert!(
+        state.apply(&pres(0xBBBB, 1, 20, 800), 2_000),
+        "a restarted desktop must not be rejected as stale"
+    );
+}
+
+#[test]
+fn the_transient_overlay_expires_locally_back_to_primary() {
+    let mut state = kivori_firmware::runtime::PresentationState::new();
+    state.begin_session(0xAAAA);
+    state.apply(&pres(0xAAAA, 1, 50, 800), 1_000);
+
+    assert!(state.value_at(1_799).is_some(), "still inside the window");
+    assert!(
+        state.value_at(1_800).is_none(),
+        "expired overlays restore the underlying primary state"
+    );
+    assert_eq!(state.primary(), PrimaryState::Idle);
+}
+
+#[test]
+fn a_persistent_presentation_never_expires() {
+    let mut state = kivori_firmware::runtime::PresentationState::new();
+    state.begin_session(0xAAAA);
+    state.apply(&pres(0xAAAA, 1, 50, 0), 1_000);
+    assert!(state.value_at(600_000).is_some());
+}

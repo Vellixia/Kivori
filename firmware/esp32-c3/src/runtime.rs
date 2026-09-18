@@ -36,8 +36,9 @@ use crate::proto::{DeviceIdentity, Dispatcher};
 use crate::render::TileRenderer;
 use crate::state::{DeviceEvent, DeviceState};
 use kivori_assets::AssetBlob;
+use kivori_model::presentation::{PrimaryState, ValueDisplay};
 use kivori_model::{CompanionState, ElapsedMs};
-use kivori_protocol::{InputKind, Message};
+use kivori_protocol::{InputKind, Message, Nonce, Presentation};
 
 /// Inactivity window, in milliseconds, after which an open rotary gesture ends
 /// (user-story-contract section 5). Firmware-wide: both the production runtime and the host-sim
@@ -117,6 +118,90 @@ impl<S: DisplaySink> DisplaySink for CountingSink<'_, S> {
     }
 }
 
+/// Device-side presentation acceptance and local transient expiry.
+///
+/// Firmware expires the overlay itself so it cannot stick if the host disappears mid-transient,
+/// restoring the underlying `primary` (contract invariant 50).
+#[derive(Debug)]
+pub struct PresentationState {
+    session: Option<Nonce>,
+    last_revision: u32,
+    primary: PrimaryState,
+    value: Option<ValueDisplay>,
+    /// `None` = persistent; `Some(t)` = expire at this absolute ms.
+    expires_at_ms: Option<u32>,
+}
+
+impl PresentationState {
+    /// A fresh presentation state, before any session is accepted.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            session: None,
+            last_revision: 0,
+            primary: PrimaryState::Idle,
+            value: None,
+            expires_at_ms: None,
+        }
+    }
+
+    /// A new compatible host session: rebind identity and reset revision scoping.
+    pub fn begin_session(&mut self, session: Nonce) {
+        self.session = Some(session);
+        self.last_revision = 0;
+        self.value = None;
+        self.expires_at_ms = None;
+    }
+
+    /// Ends the current session: no session, no lingering overlay.
+    pub fn end_session(&mut self) {
+        self.session = None;
+        self.last_revision = 0;
+        self.value = None;
+        self.expires_at_ms = None;
+    }
+
+    /// Returns true when the presentation was accepted and applied.
+    pub fn apply(&mut self, p: &Presentation, now_ms: u32) -> bool {
+        if self.session != Some(p.session) {
+            return false;
+        }
+        if p.revision <= self.last_revision {
+            return false;
+        }
+        self.last_revision = p.revision;
+        self.primary = p.primary;
+        self.value = p.value;
+        self.expires_at_ms = if p.value.is_some() && p.transient_ms > 0 {
+            Some(now_ms.wrapping_add(u32::from(p.transient_ms)))
+        } else {
+            None
+        };
+        true
+    }
+
+    /// The overlay still in force at `now_ms`, if any.
+    #[must_use]
+    pub fn value_at(&self, now_ms: u32) -> Option<ValueDisplay> {
+        match self.expires_at_ms {
+            Some(deadline) if now_ms >= deadline => None,
+            _ => self.value,
+        }
+    }
+
+    /// The underlying truth beneath any transient overlay.
+    #[must_use]
+    pub const fn primary(&self) -> PrimaryState {
+        self.primary
+    }
+}
+
+impl Default for PresentationState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// The production device runtime: lifecycle, protocol, rendering, and diagnostics.
 pub struct Runtime {
     dispatcher: Dispatcher,
@@ -131,6 +216,8 @@ pub struct Runtime {
     decoder: QuadratureDecoder,
     /// Groups validated detents into gestures (identity + the 250 ms inactivity boundary).
     gesture: RotaryGesture,
+    /// Session-scoped acceptance and local expiry of the device-rendered `Presentation` overlay.
+    presentation: PresentationState,
 }
 
 impl Runtime {
@@ -148,6 +235,7 @@ impl Runtime {
             last_rendered: None,
             decoder: QuadratureDecoder::new(),
             gesture: RotaryGesture::new(GESTURE_END_MS),
+            presentation: PresentationState::new(),
         }
     }
 
@@ -211,6 +299,22 @@ impl Runtime {
         if self.dispatcher.take_session_ended() {
             self.decoder.reset();
             self.gesture.reset();
+            // A session boundary is also a presentation-scoping boundary: `revision` is strictly
+            // increasing WITHIN a session and resets with it, so a restarted desktop starting
+            // again at revision 1 is never rejected as stale traffic from the old, higher-revision
+            // session. `accepted_session()` tells us whether this boundary opened a new session
+            // (`Some`) or closed one (`None`).
+            match self.dispatcher.accepted_session() {
+                Some(session) => self.presentation.begin_session(session),
+                None => self.presentation.end_session(),
+            }
+        }
+
+        // Apply any `Presentation` the dispatcher accepted this poll. Capability negotiation and
+        // session/revision freshness are already enforced by the dispatcher and `PresentationState`
+        // themselves, so this is unconditional.
+        if let Some(presentation) = self.dispatcher.take_presentation() {
+            self.presentation.apply(&presentation, now);
         }
 
         // 3. Physical input: sample once per tick, turn validated detents into gestures, and emit
@@ -259,7 +363,12 @@ impl Runtime {
                 flushes: 0,
                 failed: false,
             };
-            let outcome = self.renderer.render(blob, state, now, &mut counting);
+            // The transient overlay, if still in force; expired locally back to `None` so the
+            // panel shows plain `state` once it lapses, with no host timer or round trip needed.
+            let overlay = self.presentation.value_at(now);
+            let outcome =
+                self.renderer
+                    .render_with_overlay(blob, state, now, overlay, &mut counting);
             tick.tiles_flushed = counting.flushes;
             let failed = counting.failed;
             if outcome.is_err() {

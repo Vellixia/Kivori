@@ -11,8 +11,8 @@ use heapless::Vec;
 use kivori_model::{Capabilities, ProtocolVersion};
 use kivori_protocol::{
     decode_message, encode_message, ControlId, DeviceId, FirmwareVersion, HelloAck, InputEvent,
-    InputKind, Message, Nonce, SeqClass, SequenceTracker, StateReport, MAX_FRAME, MAX_WIRE,
-    PROTOCOL_MAJOR, PROTOCOL_MINOR,
+    InputKind, Message, Nonce, Presentation, SeqClass, SequenceTracker, StateReport, MAX_FRAME,
+    MAX_WIRE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
 };
 
 /// Inbound accumulation capacity: room for a partial packet plus one full wire packet.
@@ -66,6 +66,11 @@ pub struct Dispatcher {
     /// state (the decoder/gesture layers) that must not survive it. Single-slot, like `pending`:
     /// consumed once via [`Self::take_session_ended`].
     session_ended: bool,
+    /// One pending accepted `Presentation`, until [`Self::take_presentation`] drains it (the
+    /// runtime does so every tick, so nothing here is ever silently overwritten unseen). Only ever
+    /// set when `PRESENTATION_V1` is negotiated — an unnegotiated capability leaves this field
+    /// permanently empty, never merely unread.
+    pending_presentation: Option<Presentation>,
 }
 
 impl Dispatcher {
@@ -86,6 +91,7 @@ impl Dispatcher {
             accepted_session: None,
             negotiated_caps: Capabilities::NONE,
             session_ended: false,
+            pending_presentation: None,
         }
     }
 
@@ -146,6 +152,11 @@ impl Dispatcher {
             device_ms,
         });
         self.send(transport, &msg).is_ok()
+    }
+
+    /// Takes the pending accepted `Presentation`, if any (see [`Self::pending_presentation`]).
+    pub fn take_presentation(&mut self) -> Option<Presentation> {
+        self.pending_presentation.take()
     }
 
     /// Takes the pending safe diagnostic, if any. The caller decides whether to transmit it.
@@ -311,6 +322,14 @@ impl Dispatcher {
             Message::Ping(ping) => {
                 self.send(transport, &Message::Pong(build_pong(ping.t_ms, now_ms)))?;
                 self.pongs = self.pongs.saturating_add(1);
+            }
+            Message::Presentation(presentation) => {
+                // An unnegotiated capability MUST stay completely inert: drop it exactly like any
+                // message kind this device does not act on (the `_` arm below) — no diagnostic,
+                // no render.
+                if self.negotiated_caps.contains(Capabilities::PRESENTATION_V1) {
+                    self.pending_presentation = Some(presentation);
+                }
             }
             Message::Bye(_) => {
                 // Session closed: drop the link and reset sequence tracking for the next session.

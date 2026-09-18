@@ -11,6 +11,7 @@ pub mod input;
 pub mod ipc;
 pub mod orchestrator;
 pub mod platform;
+pub mod presentation;
 pub mod render;
 pub mod runtime;
 pub mod window_lifecycle;

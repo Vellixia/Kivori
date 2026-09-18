@@ -16,8 +16,8 @@ use crate::orchestrator::Orchestrator;
 use kivori_model::{Capabilities, CompanionState, ProtocolVersion, SendableState};
 use kivori_protocol::{
     decode_frame, decode_message, encode_message, evaluate_hello_ack, Bye, ByeReason,
-    FirmwareVersion, HandshakeOutcome, Hello, Message, Ping, ProtoError, SeqClass, SequenceTracker,
-    SetState, MAX_FRAME, MAX_WIRE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
+    FirmwareVersion, HandshakeOutcome, Hello, InputEvent, Message, Ping, Presentation, ProtoError,
+    SeqClass, SequenceTracker, SetState, MAX_FRAME, MAX_WIRE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
 };
 
 /// Static session parameters (the desktop's advertised identity + compatibility).
@@ -71,8 +71,14 @@ pub struct Session {
     /// handshake is accepted, and cleared on every path out of `Connected` (including `Bye`) so a
     /// stale nonce can never be mistaken for a fresh one (no-stale-replay guarantee).
     current_session: Option<u32>,
+    /// The capability set negotiated at the last accepted handshake. Connection-scoped, exactly
+    /// like `current_session`: `Capabilities::NONE` until a handshake is accepted, and cleared on
+    /// every path out of `Connected` so a stale negotiation can never gate a new one's traffic.
+    negotiated_caps: Capabilities,
     heartbeat: HeartbeatMonitor,
     reported: Option<CompanionState>,
+    /// `InputEvent`s decoded this/previous `pump()` calls, awaiting `Self::take_input_events`.
+    pending_inputs: Vec<InputEvent>,
 }
 
 impl Session {
@@ -97,8 +103,10 @@ impl Session {
             sent_hello: None,
             nonce_source: source,
             current_session: None,
+            negotiated_caps: Capabilities::NONE,
             heartbeat: HeartbeatMonitor::default(),
             reported: None,
+            pending_inputs: Vec::new(),
         }
     }
 
@@ -106,6 +114,18 @@ impl Session {
     #[must_use]
     pub const fn current_session(&self) -> Option<u32> {
         self.current_session
+    }
+
+    /// The capability set negotiated at the last accepted handshake (`Capabilities::NONE` when no
+    /// session is established).
+    #[must_use]
+    pub const fn negotiated_caps(&self) -> Capabilities {
+        self.negotiated_caps
+    }
+
+    /// Drains every `InputEvent` decoded by [`Session::pump`] since the last call.
+    pub fn take_input_events(&mut self) -> Vec<InputEvent> {
+        std::mem::take(&mut self.pending_inputs)
     }
 
     /// Opens a session on a freshly-connected port: marks the manager `Connecting` and sends `Hello`.
@@ -125,6 +145,8 @@ impl Session {
         self.heartbeat = HeartbeatMonitor::default();
         self.reported = None;
         self.current_session = None;
+        self.negotiated_caps = Capabilities::NONE;
+        self.pending_inputs.clear();
         let nonce = match self.nonce_source.next_nonce() {
             Ok(nonce) => nonce,
             Err(NonceError::Unavailable) => {
@@ -197,6 +219,22 @@ impl Session {
         self.send(link, &Message::Ping(Ping { t_ms }))
     }
 
+    /// Sends a `Presentation` to the device (Slice 002 return path).
+    ///
+    /// Callers MUST check [`Session::negotiated_caps`] for `PRESENTATION_V1` before calling this —
+    /// an unnegotiated capability must produce no encode at all, not merely go unacted-on at the
+    /// device (see `runtime::device_task`).
+    ///
+    /// # Errors
+    /// [`SessionError::Transport`] if the write fails.
+    pub fn send_presentation<L: SerialLink>(
+        &mut self,
+        link: &mut L,
+        presentation: Presentation,
+    ) -> Result<(), SessionError<L::Error>> {
+        self.send(link, &Message::Presentation(presentation))
+    }
+
     /// Whether the heartbeat has missed its threshold (the caller then raises `HeartbeatTimeout`).
     #[must_use]
     pub fn heartbeat_timed_out(&self) -> bool {
@@ -228,6 +266,7 @@ impl Session {
                         device_major: header.version.major,
                     }) {
                         self.current_session = None;
+                        self.negotiated_caps = Capabilities::NONE;
                         self.send(
                             link,
                             &Message::Bye(Bye {
@@ -266,6 +305,7 @@ impl Session {
                         // Session identity is scoped to this connection: the nonce we sent becomes
                         // the current session only once the handshake is accepted.
                         self.current_session = Some(sent.nonce);
+                        self.negotiated_caps = ready.negotiated_caps;
                         manager.apply(ManagerEvent::HandshakeOk(summarize(&ack, device_version)));
                         self.send(link, &Message::Ready(ready))?;
                         // Resynchronize the device to our desired state on (re)connect (FR-009).
@@ -274,6 +314,7 @@ impl Session {
                     }
                     HandshakeOutcome::Incompatible { device_major } => {
                         self.current_session = None;
+                        self.negotiated_caps = Capabilities::NONE;
                         if manager.apply(ManagerEvent::HandshakeIncompatible { device_major }) {
                             self.send(
                                 link,
@@ -286,15 +327,18 @@ impl Session {
                     HandshakeOutcome::BadNonce => {
                         // Identity not confirmed — treat as a failed handshake.
                         self.current_session = None;
+                        self.negotiated_caps = Capabilities::NONE;
                         manager.apply(ManagerEvent::HandshakeTimeout);
                     }
                 }
             }
             Message::Pong(_) => self.heartbeat.on_pong(),
             Message::StateReport(report) => self.reported = Some(report.reported),
+            Message::InputEvent(event) => self.pending_inputs.push(event),
             Message::Bye(_) => {
                 // The device is ending the session: no connection, no session identity.
                 self.current_session = None;
+                self.negotiated_caps = Capabilities::NONE;
             }
             // The remaining device→desktop kinds are observed by the UI layer, not here.
             _ => {}
@@ -340,6 +384,7 @@ impl Session {
                         // A write failure means this connection is gone: no lingering session
                         // identity (a subsequent IoError takes the manager out of `Connected`).
                         self.current_session = None;
+                        self.negotiated_caps = Capabilities::NONE;
                         return Err(SessionError::Transport(e));
                     }
                 };
@@ -360,6 +405,7 @@ impl Session {
                 Err(e) => {
                     // A read failure means this connection is gone: no lingering session identity.
                     self.current_session = None;
+                    self.negotiated_caps = Capabilities::NONE;
                     return Err(SessionError::Transport(e));
                 }
             };

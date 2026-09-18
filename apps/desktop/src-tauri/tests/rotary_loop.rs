@@ -414,3 +414,62 @@ fn an_endpoint_rebind_mid_gesture_discards_the_gesture_rather_than_retargeting()
         None
     );
 }
+
+use kivori_desktop::presentation::{PresentationResolver, ProductSnapshot};
+use kivori_model::presentation::{PrimaryState, ValueKind};
+
+#[test]
+fn revision_increases_strictly_within_a_session() {
+    let mut r = PresentationResolver::new(0xAAAA);
+    let a = r.resolve(&ProductSnapshot::idle());
+    let b = r.resolve(&ProductSnapshot::idle());
+    assert!(b.revision > a.revision);
+    assert_eq!(a.session, 0xAAAA);
+}
+
+#[test]
+fn revision_resets_when_a_new_session_begins() {
+    let mut r = PresentationResolver::new(0xAAAA);
+    for _ in 0..743 {
+        r.resolve(&ProductSnapshot::idle());
+    }
+    let high = r.resolve(&ProductSnapshot::idle()).revision;
+    assert!(high >= 743);
+
+    r.begin_session(0xBBBB);
+    let fresh = r.resolve(&ProductSnapshot::idle());
+    assert_eq!(fresh.session, 0xBBBB);
+    assert_eq!(
+        fresh.revision, 1,
+        "a restarted desktop starts at revision 1"
+    );
+}
+
+#[test]
+fn a_value_update_becomes_a_transient_overlay_over_the_underlying_state() {
+    let mut r = PresentationResolver::new(1);
+    let p = r.resolve(&ProductSnapshot::with_value(ValueUpdate {
+        percent: 60,
+        confidence: ValueConfidence::Preview,
+        at_boundary: false,
+    }));
+
+    let value = p.value.expect("overlay present");
+    assert_eq!(value.kind, ValueKind::Volume);
+    assert_eq!(value.current_percent, 60);
+    assert_eq!(value.confidence, ValueConfidence::Preview);
+    assert!(p.transient_ms > 0, "the overlay must expire");
+    assert_eq!(
+        p.primary,
+        PrimaryState::Idle,
+        "the underlying truth the device restores to"
+    );
+}
+
+#[test]
+fn a_failed_outcome_resolves_to_error_without_a_value_overlay() {
+    let mut r = PresentationResolver::new(1);
+    let p = r.resolve(&ProductSnapshot::failed());
+    assert_eq!(p.primary, PrimaryState::Error);
+    assert_eq!(p.value, None);
+}

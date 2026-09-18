@@ -17,6 +17,10 @@ default = ["device-studio"]
 device-studio = []
 # DEV-ONLY: enables raw-payload hex logging paths (ADR-0005 §3). Never enable in a shipped build.
 debug-payloads = []
+# Selects the real Windows volume backend (`platform::windows`, WASAPI). Off until that module
+# exists (Task 12); until then every platform, including Windows, falls back to
+# `UnimplementedVolumeBackend` so this crate always compiles.
+windows-audio = []
 
 [dependencies]
 kivori-model = { path = "../../../crates/kivori-model" }
