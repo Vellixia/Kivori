@@ -206,3 +206,211 @@ fn an_unimplemented_backend_does_not_attempt_execution() {
         Outcome::Failed { .. }
     ));
 }
+
+use kivori_desktop::action::gesture_value::{GestureValue, ValueUpdate};
+use kivori_model::presentation::ValueConfidence;
+
+fn preview(percent: u8) -> Option<ValueUpdate> {
+    Some(ValueUpdate {
+        percent,
+        confidence: ValueConfidence::Preview,
+        at_boundary: false,
+    })
+}
+
+fn confirmed(percent: u8) -> Option<ValueUpdate> {
+    Some(ValueUpdate {
+        percent,
+        confidence: ValueConfidence::Confirmed,
+        at_boundary: false,
+    })
+}
+
+#[test]
+fn detents_during_a_gesture_are_preview_never_confirmed() {
+    let backend = FakeVolumeBackend::new(50);
+    let mut gv = GestureValue::new();
+
+    gv.on_input(LogicalInput::GestureStarted { gesture_id: 1 }, &backend);
+    assert_eq!(
+        gv.on_input(
+            LogicalInput::Detent {
+                gesture_id: 1,
+                direction: Direction::Cw
+            },
+            &backend
+        ),
+        preview(52)
+    );
+    assert_eq!(
+        gv.on_input(
+            LogicalInput::Detent {
+                gesture_id: 1,
+                direction: Direction::Cw
+            },
+            &backend
+        ),
+        preview(54)
+    );
+}
+
+#[test]
+fn gesture_end_reconciles_to_the_value_the_backend_reports() {
+    // The backend quantises, so the confirmed value differs from the preview.
+    let backend = FakeVolumeBackend::quantised(50, 5);
+    let mut gv = GestureValue::new();
+
+    gv.on_input(LogicalInput::GestureStarted { gesture_id: 1 }, &backend);
+    assert_eq!(
+        gv.on_input(
+            LogicalInput::Detent {
+                gesture_id: 1,
+                direction: Direction::Cw
+            },
+            &backend
+        ),
+        preview(52)
+    );
+    assert_eq!(
+        gv.on_input(LogicalInput::GestureEnded { gesture_id: 1 }, &backend),
+        confirmed(50),
+        "confirmed state wins over the local preview"
+    );
+}
+
+#[test]
+fn an_external_change_during_a_gesture_does_not_overwrite_the_preview() {
+    let backend = FakeVolumeBackend::new(50);
+    let mut gv = GestureValue::new();
+
+    gv.on_input(LogicalInput::GestureStarted { gesture_id: 1 }, &backend);
+    gv.on_input(
+        LogicalInput::Detent {
+            gesture_id: 1,
+            direction: Direction::Cw,
+        },
+        &backend,
+    );
+
+    // Somebody moves the Windows flyout mid-gesture.
+    assert_eq!(
+        gv.on_external_change(10),
+        None,
+        "external updates must not visually fight an active gesture"
+    );
+
+    // It is applied once the gesture ends.
+    backend.external_change(10);
+    assert_eq!(
+        gv.on_input(LogicalInput::GestureEnded { gesture_id: 1 }, &backend),
+        confirmed(10)
+    );
+}
+
+#[test]
+fn an_external_change_outside_a_gesture_is_confirmed_immediately() {
+    let mut gv = GestureValue::new();
+    assert_eq!(gv.on_external_change(77), confirmed(77));
+}
+
+#[test]
+fn a_write_without_readback_reconciles_as_unverified() {
+    let backend = FakeVolumeBackend::unreadable_after_write(30);
+    let mut gv = GestureValue::new();
+
+    gv.on_input(LogicalInput::GestureStarted { gesture_id: 1 }, &backend);
+    let update = gv
+        .on_input(
+            LogicalInput::Detent {
+                gesture_id: 1,
+                direction: Direction::Cw,
+            },
+            &backend,
+        )
+        .expect("update");
+    assert_eq!(update.confidence, ValueConfidence::Unverified);
+    assert_ne!(
+        update.confidence,
+        ValueConfidence::Confirmed,
+        "an unobservable write must never read as confirmed"
+    );
+}
+
+#[test]
+fn confidence_never_reaches_confirmed_without_a_backend_read() {
+    let backend = FakeVolumeBackend::with_availability(ActionAvailability::RuntimeUnavailable {
+        reason: "no default render endpoint".to_string(),
+    });
+    let mut gv = GestureValue::new();
+    gv.on_input(LogicalInput::GestureStarted { gesture_id: 1 }, &backend);
+    let update = gv.on_input(
+        LogicalInput::Detent {
+            gesture_id: 1,
+            direction: Direction::Cw,
+        },
+        &backend,
+    );
+    if let Some(u) = update {
+        assert_ne!(u.confidence, ValueConfidence::Confirmed);
+    }
+}
+
+#[test]
+fn boundary_is_flagged_only_while_pressure_continues_into_the_bound() {
+    let backend = FakeVolumeBackend::new(100);
+    let mut gv = GestureValue::new();
+    gv.on_input(LogicalInput::GestureStarted { gesture_id: 1 }, &backend);
+
+    let update = gv
+        .on_input(
+            LogicalInput::Detent {
+                gesture_id: 1,
+                direction: Direction::Cw,
+            },
+            &backend,
+        )
+        .expect("update");
+    assert!(update.at_boundary);
+    assert_eq!(update.percent, 100);
+
+    let reversed = gv
+        .on_input(
+            LogicalInput::Detent {
+                gesture_id: 1,
+                direction: Direction::Ccw,
+            },
+            &backend,
+        )
+        .expect("update");
+    assert!(!reversed.at_boundary);
+    assert_eq!(reversed.percent, 98);
+}
+
+#[test]
+fn an_endpoint_rebind_mid_gesture_discards_the_gesture_rather_than_retargeting() {
+    let backend = FakeVolumeBackend::new(50);
+    let mut gv = GestureValue::new();
+    gv.on_input(LogicalInput::GestureStarted { gesture_id: 1 }, &backend);
+    gv.on_input(
+        LogicalInput::Detent {
+            gesture_id: 1,
+            direction: Direction::Cw,
+        },
+        &backend,
+    );
+
+    // The user switched output device. The new endpoint is at 20.
+    assert_eq!(gv.on_endpoint_rebind(20), confirmed(20));
+
+    // Remaining detents of the abandoned gesture must not drive the NEW endpoint.
+    assert_eq!(
+        gv.on_input(
+            LogicalInput::Detent {
+                gesture_id: 1,
+                direction: Direction::Cw
+            },
+            &backend
+        ),
+        None
+    );
+}

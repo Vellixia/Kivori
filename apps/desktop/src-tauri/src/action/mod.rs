@@ -1,5 +1,6 @@
 //! Action identity, the Slice 002 binding table, and typed execution outcomes.
 
+pub mod gesture_value;
 pub mod volume;
 
 use crate::platform::{ActionAvailability, BackendError, VolumeBackend};
