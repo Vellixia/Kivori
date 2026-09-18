@@ -202,9 +202,48 @@ Pong
 Health
 Diagnostic
 Error
+InputEvent      -- tag 11, Slice 002, capability PHYSICAL_INPUT_V1
+Presentation    -- tag 12, Slice 002, capability PRESENTATION_V1
 ```
 
 Inbound frames are validated for framing, payload length, CRC and sequence classification before semantic dispatch. Malformed input must be rejected without panicking. Future messages are added only under the protocol/version/capability rules described above.
+
+### Slice 002 `kivori-model` types
+
+Added to `kivori-model` (`src/input.rs`, `src/presentation.rs`) and nested inside `InputEvent`/
+`Presentation`. Wire-significant like every other type nested in a `kivori-protocol` message: variant
+index is part of the postcard encoding, so these are append-only from this point forward.
+
+```rust
+// kivori_model::input
+enum Direction { Cw, Ccw }
+struct InputLevels { a: bool, b: bool, sw: bool }   // not wire-carried; firmware-internal sampling only
+
+// kivori_model::presentation
+enum PrimaryState    { Idle, Active, Error, Unknown }
+enum ValueKind        { Volume }
+enum ValueConfidence  { Preview, Confirmed, Unverified }
+struct ValueDisplay {
+    kind: ValueKind,
+    current_percent: u8,
+    confidence: ValueConfidence,
+    at_boundary: bool,
+}
+```
+
+`ValueConfidence` exists so an optimistic local preview can never be rendered as observed desktop
+truth (Feature 001's data model has no equivalent — Feature 001 never carried a continuous, externally
+observable value). See [Feature 002's architecture record](../002-rotary-volume-control/architecture.md#3-protocol--two-appended-variants)
+for the full rationale.
+
+**Presentation revisions are session-scoped, not device-lifetime-scoped.** `Presentation.revision`
+(a `u32`, carried alongside these types but not itself a `kivori-model` type) is strictly increasing
+only *within* the session identified by `Presentation.session` (see §3's capability bits and
+[`contracts/protocol.md` §4.1](./contracts/protocol.md#41-nonce-as-connection-scoped-session-identity)
+for what "session" means here) and resets to 1 whenever a new session is accepted. A restarted
+desktop process is therefore never mistaken for a stale sender merely because its revision counter
+started low again — the comparison is always against the current session's own high-water mark, not
+against any prior session's.
 
 ## 11. Safe diagnostics
 
