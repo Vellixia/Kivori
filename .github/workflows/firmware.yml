@@ -42,6 +42,7 @@ jobs:
           cargo clippy --lib --features embedded -- -D warnings
           cargo clippy --lib --features wokwi-runtime -- -D warnings
           cargo clippy --lib --features wokwi-spi -- -D warnings
+          cargo clippy --lib --features wokwi-serial -- -D warnings
           cargo clippy --lib --features physical-st7789 -- -D warnings
 
   host-sim-tests:
