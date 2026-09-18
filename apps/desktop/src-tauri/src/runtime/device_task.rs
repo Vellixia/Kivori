@@ -28,7 +28,7 @@ use crate::input::InputIngress;
 use crate::ipc::dto::{connection_status, ConnectionStatusDto};
 use crate::ipc::events;
 use crate::orchestrator::Orchestrator;
-use crate::platform::{self, VolumeBackend};
+use crate::platform;
 use crate::presentation::{PresentationResolver, ProductSnapshot};
 use crate::runtime::state::DeviceCommand;
 use kivori_model::{Capabilities, ConnectionState};
@@ -66,15 +66,14 @@ fn device_loop(
     // The initial nonce is a placeholder: `begin_session` (below, on every entry to `Connected`)
     // rebinds it — and restarts `revision` at 0 — before any real `Presentation` is ever resolved.
     let mut resolver = PresentationResolver::new(0);
-    // Task 12 supplies `platform::windows`; until then every platform (including a Windows build
-    // without `windows-audio`) falls back to the honest "not implemented yet" backend so this
-    // crate always compiles.
-    #[cfg(all(windows, feature = "windows-audio"))]
-    let backend: Box<dyn VolumeBackend> = Box::new(platform::windows::WindowsVolumeBackend::new());
-    #[cfg(not(all(windows, feature = "windows-audio")))]
-    let backend: Box<dyn VolumeBackend> = Box::new(
-        platform::unimplemented::UnimplementedVolumeBackend::new(std::env::consts::OS),
-    );
+    // Windows has a real backend (`platform::windows`, Task 12); every other target falls back to
+    // the honest "not implemented yet" backend so this crate always compiles. Kept as a concrete
+    // (non-`dyn`) type here, not boxed, so the Windows branch can still reach the
+    // Windows-only `try_recv_change` below.
+    #[cfg(windows)]
+    let backend = platform::windows::WindowsVolumeBackend::new();
+    #[cfg(not(windows))]
+    let backend = platform::unimplemented::UnimplementedVolumeBackend::new(std::env::consts::OS);
     let mut link: Option<SerialPortLink> = None;
     let mut retry_at: Option<Instant> = None;
     let started = Instant::now();
@@ -98,6 +97,38 @@ fn device_loop(
                     }
                 },
                 DeviceCommand::Refresh => {}
+            }
+        }
+
+        // 1.5. Drain backend-originated volume changes (the Windows flyout, a media key, another
+        // app, or a default-endpoint switch). Every `change.percent` here is read straight from
+        // the Core Audio change-notification payload on the owning `kivori-audio` thread — never
+        // assumed, requested, or cached — so routing it through `on_external_change` /
+        // `on_endpoint_rebind` (which report `Confirmed` unconditionally) still upholds invariant
+        // 3: Confirmed only ever follows an actual backend read.
+        #[cfg(windows)]
+        while let Some(change) = backend.try_recv_change() {
+            let update = match change.origin {
+                platform::windows::ChangeOrigin::External => {
+                    gesture_value.on_external_change(change.percent)
+                }
+                platform::windows::ChangeOrigin::EndpointRebind => {
+                    gesture_value.on_endpoint_rebind(change.percent)
+                }
+                // Kivori's own write, echoed back; `set()` already confirmed it synchronously via
+                // its own read-back, so it must not be routed as a change (would double-report).
+                platform::windows::ChangeOrigin::Kivori => None,
+            };
+            if let Some(update) = update {
+                if let Some(open_link) = link.as_mut() {
+                    if session
+                        .negotiated_caps()
+                        .contains(Capabilities::PRESENTATION_V1)
+                    {
+                        let presentation = resolver.resolve(&ProductSnapshot::with_value(update));
+                        let _ = session.send_presentation(open_link, presentation);
+                    }
+                }
             }
         }
 
@@ -128,7 +159,7 @@ fn device_loop(
                             // `on_input` only ever reports `Confirmed` from an OS read the
                             // backend itself performed (gesture end, read-back); never from a
                             // requested/assumed value (invariant 3).
-                            if let Some(update) = gesture_value.on_input(input, backend.as_ref()) {
+                            if let Some(update) = gesture_value.on_input(input, &backend) {
                                 if session
                                     .negotiated_caps()
                                     .contains(Capabilities::PRESENTATION_V1)

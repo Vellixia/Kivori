@@ -10,6 +10,8 @@
 //! no producer. It arrives with the first genuinely OS-restricted action.
 
 pub mod unimplemented;
+#[cfg(windows)]
+pub mod windows;
 
 use std::sync::Mutex;
 

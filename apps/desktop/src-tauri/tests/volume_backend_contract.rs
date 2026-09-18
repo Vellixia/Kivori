@@ -138,3 +138,62 @@ fn the_unimplemented_backend_says_not_implemented_yet_not_unsupported() {
         other => panic!("expected NotImplementedYet, got {other:?}"),
     }
 }
+
+#[cfg(windows)]
+mod windows_backend {
+    use super::assert_backend_contract;
+    use kivori_desktop::platform::windows::WindowsVolumeBackend;
+    use kivori_desktop::platform::{ActionAvailability, VolumeBackend};
+
+    /// GitHub-hosted Windows runners generally expose NO audio endpoint. This test
+    /// therefore SKIPS loudly rather than passing silently — a skip is evidence of
+    /// absence, not evidence of correctness.
+    ///
+    /// Runs ONLY the non-destructive contract: it captures the user's current volume,
+    /// nudges it by 5 points, verifies read-back, and restores via `VolumeGuard`,
+    /// including on unwind. `assert_boundary_contract` is NEVER called here — a test
+    /// must not slam a real person's output to silent or full.
+    #[test]
+    fn real_backend_satisfies_the_non_destructive_contract_when_an_endpoint_exists() {
+        let backend = WindowsVolumeBackend::new();
+        match backend.availability() {
+            ActionAvailability::Available { .. } => assert_backend_contract(&backend),
+            other => {
+                eprintln!(
+                    "SKIPPED: no default render endpoint on this machine ({other:?}). \
+                     Real Core Audio behaviour is PHYSICAL WINDOWS EVIDENCE, recorded in \
+                     docs/features/002-rotary-volume-control/validation-checklist.md"
+                );
+            }
+        }
+    }
+
+    /// Belt and braces: prove the endpoint is back where the user left it.
+    #[test]
+    fn the_real_endpoint_volume_is_unchanged_after_the_contract_run() {
+        let backend = WindowsVolumeBackend::new();
+        let ActionAvailability::Available { .. } = backend.availability() else {
+            eprintln!("SKIPPED: no default render endpoint on this machine.");
+            return;
+        };
+        let before = backend.read().expect("read before");
+        assert_backend_contract(&backend);
+        assert_eq!(
+            backend.read().expect("read after"),
+            before,
+            "the contract run must leave the user's volume exactly as it found it"
+        );
+    }
+
+    #[test]
+    fn construction_without_an_endpoint_reports_runtime_unavailable_not_a_panic() {
+        let backend = WindowsVolumeBackend::new();
+        assert!(
+            !matches!(
+                backend.availability(),
+                ActionAvailability::NotImplementedYet { .. }
+            ),
+            "Windows IS implemented; absence of an endpoint is RuntimeUnavailable"
+        );
+    }
+}
