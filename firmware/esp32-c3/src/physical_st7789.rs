@@ -14,7 +14,7 @@ use embedded_hal_bus::spi::ExclusiveDevice;
 
 use esp_hal::{
     delay::Delay,
-    gpio::{Level, Output, OutputConfig},
+    gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
     peripherals::Peripherals,
     spi::master::{Config, Spi},
     time::Rate,
@@ -28,29 +28,12 @@ use mipidsi::{interface::SpiInterface, Builder};
 
 use crate::{
     display::MipidsiSink,
-    ports::InputSource,
+    physical_rotary::PhysicalRotary,
     profile::physical_st7789 as hw,
     proto::DeviceIdentity,
     runtime::{run, RuntimeConfig},
     transport::{TxBuffered, UsbJtagTransport},
 };
-use kivori_model::input::InputLevels;
-
-/// A constant-level stub: always reports no motion on any channel.
-///
-/// Physical GPIO sampling for the rotary encoder is not implemented until Task 13; until then this
-/// keeps the run loop's `InputSource` port wired with a placeholder that never produces a detent.
-struct NoInput;
-
-impl InputSource for NoInput {
-    fn sample(&mut self) -> InputLevels {
-        InputLevels {
-            a: false,
-            b: false,
-            sw: false,
-        }
-    }
-}
 
 /// Number of bytes used by `mipidsi` for batching SPI display writes.
 const SPI_BATCH_BYTES: usize = 512;
@@ -67,6 +50,9 @@ const _: () = {
     assert!(hw::RST == 3);
     assert!(hw::BL == 8);
     assert!(hw::CS.is_none());
+    assert!(hw::ROTARY.clk == 4);
+    assert!(hw::ROTARY.dt == 5);
+    assert!(hw::ROTARY.sw == 10);
 };
 
 /// Runs Kivori on the verified physical ESP32-C3 + ST7789 hardware.
@@ -171,6 +157,26 @@ pub fn run_mode(
     let mut display = MipidsiSink::new(display, hw::geometry());
 
     // -------------------------------------------------------------------------
+    // Rotary encoder input
+    //
+    // Wiring specification (unverified on physical hardware; see
+    // `profile::physical_st7789::ROTARY`):
+    //   CLK -> GPIO4
+    //   DT  -> GPIO5
+    //   SW  -> GPIO10
+    //
+    // All three lines are active-low (HW-040 COM to GND), so they are read with
+    // internal pull-ups. `PhysicalRotary` only reads and inverts pin levels; all
+    // conditioning and semantics live above the port.
+    // -------------------------------------------------------------------------
+
+    let rotary_pull = InputConfig::default().with_pull(Pull::Up);
+    let rotary_clk = Input::new(peripherals.GPIO4, rotary_pull);
+    let rotary_dt = Input::new(peripherals.GPIO5, rotary_pull);
+    let rotary_sw = Input::new(peripherals.GPIO10, rotary_pull);
+    let mut rotary = PhysicalRotary::new(rotary_clk, rotary_dt, rotary_sw);
+
+    // -------------------------------------------------------------------------
     // Compiled Kivori assets
     // -------------------------------------------------------------------------
 
@@ -220,7 +226,7 @@ pub fn run_mode(
         RuntimeConfig::default(),
         &clock,
         &mut transport,
-        &mut NoInput,
+        &mut rotary,
         &mut display,
         &blob,
         |_tick, _transport| {},

@@ -52,5 +52,8 @@ pub mod transport;
 #[cfg(feature = "wokwi-runtime")]
 pub mod wokwi_runtime;
 
+/// Physical HW-040 rotary encoder `InputSource` adapter (Task 13).
+#[cfg(feature = "physical-st7789")]
+pub mod physical_rotary;
 #[cfg(feature = "physical-st7789")]
 pub mod physical_st7789;

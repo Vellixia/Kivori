@@ -1322,3 +1322,25 @@ fn render_with_overlay_composites_the_bar_into_the_flushed_pixels() {
         "a Some overlay must actually change the rendered pixels, not just the in-memory value"
     );
 }
+
+#[test]
+fn the_rotary_profile_does_not_collide_with_the_display_profile() {
+    use kivori_firmware::profile::physical_st7789::{BL, DC, MOSI, ROTARY, RST, SCK};
+
+    let display_pins = [SCK, MOSI, DC, RST, BL];
+    for pin in [ROTARY.clk, ROTARY.dt, ROTARY.sw] {
+        assert!(
+            !display_pins.contains(&pin),
+            "rotary pin {pin} collides with the verified display profile"
+        );
+        // GPIO18/19 are the native USB Serial/JTAG pair.
+        assert!(
+            pin != 18 && pin != 19,
+            "rotary pin {pin} collides with native USB"
+        );
+    }
+
+    assert_ne!(ROTARY.clk, ROTARY.dt);
+    assert_ne!(ROTARY.clk, ROTARY.sw);
+    assert_ne!(ROTARY.dt, ROTARY.sw);
+}
