@@ -45,7 +45,7 @@ fn identity() -> DeviceIdentity {
             minor: 0,
             patch: 0,
         },
-        capabilities: Capabilities::NONE,
+        capabilities: Capabilities::PHYSICAL_INPUT_V1.union(Capabilities::PRESENTATION_V1),
     }
 }
 

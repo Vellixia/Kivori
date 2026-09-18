@@ -194,7 +194,7 @@ pub fn run_mode(
             patch: 0,
         },
 
-        capabilities: Capabilities::NONE,
+        capabilities: Capabilities::PHYSICAL_INPUT_V1.union(Capabilities::PRESENTATION_V1),
     };
 
     esp_println::println!("KIVORI runtime starting");

@@ -257,7 +257,7 @@ pub fn protocol_serial() -> String {
 
     // Unsupported capability bits: the device still answers, advertising only what it implements.
     write_serial(&mut s, "hello_unsupported_capability");
-    wait(&mut s, "KIVORI-EXT CAPS advertised=none");
+    wait(&mut s, "KIVORI-EXT CAPS advertised=some");
 
     // Unsupported major: dropped, and NO response frame is produced.
     write_serial(&mut s, "hello_incompatible_major");

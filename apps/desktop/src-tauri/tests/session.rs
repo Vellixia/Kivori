@@ -463,3 +463,92 @@ fn current_session_is_cleared_by_a_stray_bad_nonce_hello_ack_after_connect() {
         "a stray bad-nonce HelloAck must clear the live session identity"
     );
 }
+
+// --- capability gating (finding 1, task-11 review round 1): a desktop that never negotiated
+// `PHYSICAL_INPUT_V1` must never execute an `InputEvent` — not queue it, not hand it to
+// `InputIngress`, not reach a backend write. Mirrors the firmware's own receive-side gate on
+// `Presentation` (`proto.rs`).
+
+use kivori_protocol::{ControlId, InputEvent, InputKind};
+
+fn detent_event(session: u32) -> Message {
+    Message::InputEvent(InputEvent {
+        session,
+        gesture_id: 1,
+        control: ControlId::Rotary,
+        kind: InputKind::GestureStarted,
+        device_ms: 0,
+    })
+}
+
+#[test]
+fn input_events_are_dropped_without_a_negotiated_physical_input_capability() {
+    // `connect()` negotiates `Capabilities::NONE` (the device in `device_ack()` advertises none).
+    let (mut link, mut session, mut manager, mut orch) = connect(SendableState::Idle);
+    assert!(
+        !session
+            .negotiated_caps()
+            .contains(Capabilities::PHYSICAL_INPUT_V1),
+        "test setup: PHYSICAL_INPUT_V1 must not be negotiated here"
+    );
+    let nonce = session.current_session().expect("connected session");
+
+    device_push(&mut link, &detent_event(nonce), wire_version(), 1);
+    session
+        .pump(&mut link, &mut manager, &mut orch)
+        .expect("pump");
+
+    assert!(
+        session.take_input_events().is_empty(),
+        "an InputEvent must never be queued for execution without a negotiated capability"
+    );
+}
+
+#[test]
+fn input_events_are_accepted_once_physical_input_v1_is_negotiated() {
+    let mut link = FakeLink::default();
+    let mut session = Session::new(SessionConfig::default());
+    let mut manager = ConnectionManager::new();
+    let mut orchestrator = Orchestrator::new();
+
+    session.open(&mut link, &mut manager).expect("open");
+    let nonce = hello_nonce(&desktop_drain(&mut link));
+    device_push(
+        &mut link,
+        &Message::HelloAck(HelloAck {
+            device_caps: Capabilities::PHYSICAL_INPUT_V1,
+            device_id: [0x5A; 16],
+            firmware_version: FirmwareVersion {
+                major: 1,
+                minor: 4,
+                patch: 2,
+            },
+            nonce_echo: nonce,
+        }),
+        wire_version(),
+        0,
+    );
+    session
+        .pump(&mut link, &mut manager, &mut orchestrator)
+        .expect("pump");
+    assert!(session
+        .negotiated_caps()
+        .contains(Capabilities::PHYSICAL_INPUT_V1));
+
+    device_push(&mut link, &detent_event(nonce), wire_version(), 1);
+    session
+        .pump(&mut link, &mut manager, &mut orchestrator)
+        .expect("pump");
+
+    assert_eq!(
+        session.take_input_events(),
+        vec![InputEvent {
+            session: nonce,
+            gesture_id: 1,
+            control: ControlId::Rotary,
+            kind: InputKind::GestureStarted,
+            device_ms: 0,
+        }],
+        "a negotiated capability must let the InputEvent reach execution"
+    );
+}

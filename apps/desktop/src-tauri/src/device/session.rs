@@ -42,7 +42,10 @@ impl Default for SessionConfig {
                 patch: 0,
             },
             protocol_version: ProtocolVersion::new(PROTOCOL_MAJOR, PROTOCOL_MINOR),
-            capabilities: Capabilities::NONE,
+            // Slice 002: the desktop implements both the rotary input receive path and the
+            // presentation send path, so it advertises both — negotiation (the intersection with
+            // whatever the device itself advertises) is what actually gates behaviour.
+            capabilities: Capabilities::PHYSICAL_INPUT_V1.union(Capabilities::PRESENTATION_V1),
             supported_majors: vec![PROTOCOL_MAJOR],
         }
     }
@@ -334,7 +337,16 @@ impl Session {
             }
             Message::Pong(_) => self.heartbeat.on_pong(),
             Message::StateReport(report) => self.reported = Some(report.reported),
-            Message::InputEvent(event) => self.pending_inputs.push(event),
+            Message::InputEvent(event) => {
+                // An unnegotiated capability MUST stay completely inert: never queued, never
+                // executed, mirroring the firmware's own receive-side gate on `Presentation`.
+                if self
+                    .negotiated_caps
+                    .contains(Capabilities::PHYSICAL_INPUT_V1)
+                {
+                    self.pending_inputs.push(event);
+                }
+            }
             Message::Bye(_) => {
                 // The device is ending the session: no connection, no session identity.
                 self.current_session = None;

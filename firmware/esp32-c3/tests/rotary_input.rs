@@ -1124,3 +1124,201 @@ fn a_persistent_presentation_never_expires() {
     state.apply(&pres(0xAAAA, 1, 50, 0), 1_000);
     assert!(state.value_at(600_000).is_some());
 }
+
+/// A precomputed `applied_at_ms + transient_ms` deadline can itself wrap past `u32::MAX` (~49.7
+/// days of device uptime) before `now_ms` does, which would make a naive `now_ms >= deadline`
+/// comparison see a small deadline and a huge `now_ms` and report the overlay expired instantly —
+/// even though almost no real time has passed. `value_at` must compare elapsed time
+/// (`now_ms.wrapping_sub(applied_at_ms)`), not a precomputed absolute deadline.
+#[test]
+fn transient_expiry_is_wrap_safe_across_a_device_uptime_rollover() {
+    let mut state = kivori_firmware::runtime::PresentationState::new();
+    state.begin_session(0xAAAA);
+    let applied_at = u32::MAX - 100;
+    assert!(state.apply(&pres(0xAAAA, 1, 50, 800), applied_at));
+
+    // Only 50ms have really elapsed since `applied_at` (no wrap has happened yet): must still be
+    // inside the 800ms window, even though `applied_at + 800` itself wraps past `u32::MAX`.
+    assert!(
+        state.value_at(applied_at + 50).is_some(),
+        "only 50ms elapsed; must not expire instantly due to the deadline wrapping"
+    );
+
+    // 800ms after `applied_at`, the clock has now genuinely wrapped: the overlay must still
+    // expire correctly once that much real time has passed.
+    assert!(
+        state.value_at(applied_at.wrapping_add(800)).is_none(),
+        "800ms genuinely elapsed (clock wrapped) must still expire"
+    );
+}
+
+// --- Presentation capability gate reaches the panel as a real tile flush (task-11 review round 1,
+// finding 3): a unit test on `PresentationResolver`/`PresentationState` alone would still pass if
+// the capability gate, the session-boundary wiring, or the render-gate wiring in `Runtime::step`
+// were deleted. These drive the real `Runtime` over the wire and assert on `Tick::tiles_flushed`.
+
+use kivori_firmware::render::TileRenderer;
+use kivori_framebuffer::hash_rgb565;
+use kivori_model::CompanionState;
+
+fn presentation_gating_identity(capabilities: Capabilities) -> DeviceIdentity {
+    DeviceIdentity {
+        device_id: [0xAB; 16],
+        firmware_version: FirmwareVersion {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
+        capabilities,
+    }
+}
+
+fn presentation_message(session: Nonce, revision: u32) -> Message {
+    Message::Presentation(Presentation {
+        session,
+        revision,
+        primary: PrimaryState::Idle,
+        value: Some(ValueDisplay {
+            kind: ValueKind::Volume,
+            current_percent: 70,
+            confidence: ValueConfidence::Confirmed,
+            at_boundary: false,
+        }),
+        transient_ms: 800,
+    })
+}
+
+#[test]
+fn a_negotiated_presentation_reaches_the_panel_as_a_real_tile_flush() {
+    let mut runtime = Runtime::new(
+        presentation_gating_identity(Capabilities::PRESENTATION_V1),
+        RuntimeConfig::default(),
+    );
+    let clock = VirtualClock::new();
+    let mut pipe = SimPipe::new();
+    let mut display = CaptureDisplay::new();
+    let blob_bytes = compile_default_blob();
+    let blob = AssetBlob::parse(&blob_bytes).expect("valid blob");
+    let mut idle = ScriptedInput::new(vec![lv(false, false)]);
+    let nonce: Nonce = 0xC0DE_0001;
+
+    gating_host_write(
+        &mut pipe,
+        &Message::Hello(Hello {
+            desktop_version: FirmwareVersion {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            desktop_caps: Capabilities::PRESENTATION_V1,
+            nonce,
+        }),
+        0,
+    );
+    runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
+    gating_host_write(
+        &mut pipe,
+        &Message::Ready(Ready {
+            negotiated_minor: 0,
+            negotiated_caps: Capabilities::PRESENTATION_V1,
+        }),
+        1,
+    );
+    runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
+
+    gating_host_write(&mut pipe, &presentation_message(nonce, 1), 2);
+    clock.advance(33); // cross the frame-interval boundary so the render gate actually fires
+    let tick = runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
+
+    assert!(
+        tick.tiles_flushed > 0,
+        "a negotiated Presentation must actually reach the panel as a tile flush, not just \
+         update in-memory state"
+    );
+}
+
+#[test]
+fn an_unnegotiated_presentation_never_reaches_the_panel() {
+    // The desktop over-claims PRESENTATION_V1 in both `Hello` and `Ready`; the DEVICE never
+    // advertised it, so the dispatcher's intersection must still gate it out — mirrors
+    // `send_input_event_is_inert_when_the_desktop_over_claims_a_capability_the_device_never_advertised`.
+    let mut runtime = Runtime::new(
+        presentation_gating_identity(Capabilities::NONE),
+        RuntimeConfig::default(),
+    );
+    let clock = VirtualClock::new();
+    let mut pipe = SimPipe::new();
+    let mut display = CaptureDisplay::new();
+    let blob_bytes = compile_default_blob();
+    let blob = AssetBlob::parse(&blob_bytes).expect("valid blob");
+    let mut idle = ScriptedInput::new(vec![lv(false, false)]);
+    let nonce: Nonce = 0xC0DE_0002;
+
+    gating_host_write(
+        &mut pipe,
+        &Message::Hello(Hello {
+            desktop_version: FirmwareVersion {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            desktop_caps: Capabilities::PRESENTATION_V1,
+            nonce,
+        }),
+        0,
+    );
+    runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
+    gating_host_write(
+        &mut pipe,
+        &Message::Ready(Ready {
+            negotiated_minor: 0,
+            negotiated_caps: Capabilities::PRESENTATION_V1,
+        }),
+        1,
+    );
+    runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
+
+    gating_host_write(&mut pipe, &presentation_message(nonce, 1), 2);
+    clock.advance(33);
+    let tick = runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
+
+    assert_eq!(
+        tick.tiles_flushed, 0,
+        "an unnegotiated capability must leave the panel completely untouched"
+    );
+}
+
+#[test]
+fn render_with_overlay_composites_the_bar_into_the_flushed_pixels() {
+    let blob_bytes = compile_default_blob();
+    let blob = AssetBlob::parse(&blob_bytes).expect("valid blob");
+
+    let mut plain = TileRenderer::new();
+    let mut plain_display = CaptureDisplay::new();
+    plain
+        .render_with_overlay(&blob, CompanionState::Idle, 0, None, &mut plain_display)
+        .expect("plain render");
+
+    let mut overlaid = TileRenderer::new();
+    let mut overlaid_display = CaptureDisplay::new();
+    overlaid
+        .render_with_overlay(
+            &blob,
+            CompanionState::Idle,
+            0,
+            Some(ValueDisplay {
+                kind: ValueKind::Volume,
+                current_percent: 60,
+                confidence: ValueConfidence::Confirmed,
+                at_boundary: false,
+            }),
+            &mut overlaid_display,
+        )
+        .expect("overlaid render");
+
+    assert_ne!(
+        hash_rgb565(plain_display.frame()),
+        hash_rgb565(overlaid_display.frame()),
+        "a Some overlay must actually change the rendered pixels, not just the in-memory value"
+    );
+}

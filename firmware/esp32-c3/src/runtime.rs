@@ -128,8 +128,16 @@ pub struct PresentationState {
     last_revision: u32,
     primary: PrimaryState,
     value: Option<ValueDisplay>,
-    /// `None` = persistent; `Some(t)` = expire at this absolute ms.
-    expires_at_ms: Option<u32>,
+    /// The device-ms timestamp `value` was applied at. Meaningless when `transient_ms == 0`
+    /// (persistent) or `value` is `None`.
+    applied_at_ms: u32,
+    /// `0` = persistent; otherwise `value` expires this many ms after `applied_at_ms`, compared
+    /// via `wrapping_sub` (the same idiom `RotaryGesture`'s inactivity window uses) rather than a
+    /// precomputed absolute deadline — a precomputed `applied_at_ms + transient_ms` can itself
+    /// wrap past `u32::MAX` (~49.7 days of device uptime) while `now_ms` has not yet wrapped,
+    /// which would make a plain `now_ms >= deadline` comparison see a small deadline and a huge
+    /// `now_ms` and report the overlay expired instantly.
+    transient_ms: u16,
 }
 
 impl PresentationState {
@@ -141,7 +149,8 @@ impl PresentationState {
             last_revision: 0,
             primary: PrimaryState::Idle,
             value: None,
-            expires_at_ms: None,
+            applied_at_ms: 0,
+            transient_ms: 0,
         }
     }
 
@@ -150,7 +159,7 @@ impl PresentationState {
         self.session = Some(session);
         self.last_revision = 0;
         self.value = None;
-        self.expires_at_ms = None;
+        self.transient_ms = 0;
     }
 
     /// Ends the current session: no session, no lingering overlay.
@@ -158,7 +167,7 @@ impl PresentationState {
         self.session = None;
         self.last_revision = 0;
         self.value = None;
-        self.expires_at_ms = None;
+        self.transient_ms = 0;
     }
 
     /// Returns true when the presentation was accepted and applied.
@@ -172,20 +181,23 @@ impl PresentationState {
         self.last_revision = p.revision;
         self.primary = p.primary;
         self.value = p.value;
-        self.expires_at_ms = if p.value.is_some() && p.transient_ms > 0 {
-            Some(now_ms.wrapping_add(u32::from(p.transient_ms)))
-        } else {
-            None
-        };
+        self.applied_at_ms = now_ms;
+        self.transient_ms = if p.value.is_some() { p.transient_ms } else { 0 };
         true
     }
 
     /// The overlay still in force at `now_ms`, if any.
     #[must_use]
     pub fn value_at(&self, now_ms: u32) -> Option<ValueDisplay> {
-        match self.expires_at_ms {
-            Some(deadline) if now_ms >= deadline => None,
-            _ => self.value,
+        if self.transient_ms == 0 {
+            return self.value;
+        }
+        // Wrap-aware elapsed time (see the `transient_ms` field doc): correct across a device
+        // uptime rollover, unlike comparing `now_ms` against a precomputed absolute deadline.
+        if now_ms.wrapping_sub(self.applied_at_ms) >= u32::from(self.transient_ms) {
+            None
+        } else {
+            self.value
         }
     }
 
