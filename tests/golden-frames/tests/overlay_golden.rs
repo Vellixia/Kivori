@@ -73,3 +73,60 @@ fn percent_above_one_hundred_is_clamped_to_full() {
         frame_hash(&draw(100, ValueConfidence::Confirmed, false))
     );
 }
+
+// Committed golden frame-hashes (FNV-1a over RGB565 LE bytes); see manifest.toml `[overlay.frame]`.
+const H_0_CONFIRMED: u64 = 0xBC2E_D144_C581_85E5;
+const H_49_CONFIRMED: u64 = 0xFA46_442C_70DB_3145;
+const H_50_CONFIRMED: u64 = 0xD454_B404_1BAE_D395;
+const H_51_CONFIRMED: u64 = 0xE6C3_040C_1631_2CBD;
+const H_100_CONFIRMED: u64 = 0x416F_A57F_DB1E_6145;
+const H_100_CONFIRMED_BOUNDARY: u64 = 0xA705_9821_BF58_F325;
+const H_50_PREVIEW: u64 = 0xEC9B_2BEE_3F4F_44AD;
+const H_50_UNVERIFIED: u64 = 0x0682_064E_865B_B565;
+
+/// Each recorded manifest hash must match a fresh render: a regression that moves the overlay's
+/// pixels (bar position, colour, off-by-one fill) must fail here even though the tests above only
+/// compare live renders against each other.
+#[test]
+fn overlay_frame_hashes_match_manifest() {
+    assert_eq!(
+        frame_hash(&draw(0, ValueConfidence::Confirmed, false)),
+        H_0_CONFIRMED,
+        "percent=0, confirmed, at_boundary=false"
+    );
+    assert_eq!(
+        frame_hash(&draw(49, ValueConfidence::Confirmed, false)),
+        H_49_CONFIRMED,
+        "percent=49, confirmed, at_boundary=false"
+    );
+    assert_eq!(
+        frame_hash(&draw(50, ValueConfidence::Confirmed, false)),
+        H_50_CONFIRMED,
+        "percent=50, confirmed, at_boundary=false"
+    );
+    assert_eq!(
+        frame_hash(&draw(51, ValueConfidence::Confirmed, false)),
+        H_51_CONFIRMED,
+        "percent=51, confirmed, at_boundary=false"
+    );
+    assert_eq!(
+        frame_hash(&draw(100, ValueConfidence::Confirmed, false)),
+        H_100_CONFIRMED,
+        "percent=100, confirmed, at_boundary=false"
+    );
+    assert_eq!(
+        frame_hash(&draw(100, ValueConfidence::Confirmed, true)),
+        H_100_CONFIRMED_BOUNDARY,
+        "percent=100, confirmed, at_boundary=true"
+    );
+    assert_eq!(
+        frame_hash(&draw(50, ValueConfidence::Preview, false)),
+        H_50_PREVIEW,
+        "percent=50, preview, at_boundary=false"
+    );
+    assert_eq!(
+        frame_hash(&draw(50, ValueConfidence::Unverified, false)),
+        H_50_UNVERIFIED,
+        "percent=50, unverified, at_boundary=false"
+    );
+}
