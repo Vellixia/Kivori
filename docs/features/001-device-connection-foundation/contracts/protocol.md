@@ -117,9 +117,12 @@ The mechanics:
 **Required consequence: the nonce MUST be unique across desktop process restarts, not only within a
 process.** A pure per-process counter starting at 1 is no longer sufficient — two different desktop
 processes could otherwise mint the same session identity by coincidence, and a stale event stamped
-with an old process's `1` could match a new process's `1`. Generation must combine per-process
-entropy (for example a randomly-seeded source) with the existing counter; no new dependency is
-required.
+with an old process's `1` could match a new process's `1`. The implemented fix replaces the counter
+outright: `OsNonceSource` (`apps/desktop/src-tauri/src/device/nonce.rs`) draws a fresh `u32` directly
+from OS randomness via `getrandom::getrandom()` on every handshake attempt. No counter is retained or
+combined with it. This did add one new direct dependency, `getrandom` (`apps/desktop/src-tauri/Cargo.toml`)
+— acceptable because it was already present transitively in the lockfile and is not a network client,
+so it does not trip `scripts/check-offline-deps.sh`'s banned-crate list.
 
 **This is a freshness token, not a security credential.** The nonce distinguishes "traffic belonging
 to this connection" from "traffic belonging to a previous one" well enough to satisfy no-stale-replay

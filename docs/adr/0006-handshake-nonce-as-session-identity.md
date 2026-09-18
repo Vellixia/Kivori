@@ -46,10 +46,14 @@ Reuse the handshake nonce as connection-scoped session identity, rather than int
    revision 1 is never mistaken for stale traffic against a previous process's high revision number.
 
 This required one behavioral change with a cross-peer consequence: **the nonce must become unique
-across desktop process restarts, not only within a process.** A per-process random seed combined with
-the existing counter is sufficient (no new dependency). The nonce remains a **freshness token, not a
-security credential** — it does not authenticate the desktop, it only distinguishes "this connection"
-from "a previous one" well enough to reject stale traffic.
+across desktop process restarts, not only within a process.** The implementation replaces the counter
+entirely rather than combining anything with it: `OsNonceSource` draws a fresh `u32` directly from OS
+randomness via `getrandom::getrandom()` on every handshake attempt, with no counter component
+retained (`apps/desktop/src-tauri/src/device/nonce.rs`). This adds `getrandom` as a new direct
+dependency of `kivori-desktop` (`apps/desktop/src-tauri/Cargo.toml`) — acceptable because it was
+already present transitively in the lockfile and is not a network client. The nonce remains a
+**freshness token, not a security credential** — it does not authenticate the desktop, it only
+distinguishes "this connection" from "a previous one" well enough to reject stale traffic.
 
 With session identity established this way, `gesture_id` only needs to be unique *within* a session,
 so its `u16` wraparound stops being a correctness concern.
@@ -84,5 +88,7 @@ so its `u16` wraparound stops being a correctness concern.
   which must be preserved by any future message that reuses the same revision mechanism.
 - Two adversarial tests are load-bearing evidence for this decision and must not be weakened: a
   complete stale `GestureStarted` + `Detent` pair injected immediately after a reconnect handshake
-  must produce no volume change, and a stale high-revision `Presentation` injected after a new
-  session must not be rendered (`apps/desktop/src-tauri/tests/rotary_loop.rs`).
+  must produce no volume change
+  (`apps/desktop/src-tauri/tests/rotary_loop.rs::a_complete_stale_gesture_pair_after_reconnect_executes_nothing`),
+  and a stale high-revision `Presentation` injected after a new session must not be rendered
+  (`firmware/esp32-c3/tests/rotary_input.rs::a_presentation_from_another_session_is_dropped`).

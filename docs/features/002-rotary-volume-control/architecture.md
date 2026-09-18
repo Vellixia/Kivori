@@ -109,8 +109,10 @@ as a live pair would. See the design spec §4.1 for the full argument and the ad
 **Required change to nonce generation**, recorded in the updated
 [`protocol.md`](../001-device-connection-foundation/contracts/protocol.md#nonce-as-connection-scoped-session-identity):
 the nonce can no longer be a per-process counter starting at 1 — a restarted desktop process would
-mint colliding session identities across restarts. It must be unique across process restarts as well
-as within a process. It remains a **freshness token, not a security credential**.
+mint colliding session identities across restarts. `OsNonceSource`
+(`apps/desktop/src-tauri/src/device/nonce.rs`) replaces the counter outright with a fresh `u32` drawn
+directly from OS randomness (`getrandom::getrandom()`) on every handshake attempt — no counter
+component is retained. It remains a **freshness token, not a security credential**.
 
 ### 5. Desktop modules
 
@@ -296,7 +298,7 @@ message was rejected in favor of reusing the nonce. See
 | Pure unit | every host, including macOS | quadrature decode against bounce/invalid vectors, gesture boundary, clamping/boundary suppression, outcome classification, availability derivation, presentation resolution (transient→primary fallback, within-session revision monotonicity, confidence never upgrading without a read-back) |
 | Backend contract suite | every host, via the fake | `tests/volume_backend_contract.rs` — one suite the fake and the real Windows backend both satisfy |
 | Firmware host-sim | CI | `firmware/esp32-c3/tests/rotary_input.rs` — scripted A/B level sequences produce the expected `InputEvent` stream |
-| Desktop integration | CI | `apps/desktop/src-tauri/tests/rotary_loop.rs` — `InputEvent` bytes in → `Presentation` bytes out against the fake backend, plus the §4.1 adversarial stale-session/stale-revision tests |
+| Desktop integration | CI | `apps/desktop/src-tauri/tests/rotary_loop.rs` — `InputEvent` bytes in → `Presentation` bytes out against the fake backend, plus the §4.1 adversarial stale-session-pair test (the stale-revision-`Presentation` adversarial test lives on the firmware side — see `rotary_input.rs` above) |
 | Golden frames | CI, all OSes | `kivori-golden-frames` — volume overlay determinism per `ValueConfidence`, asserting the three treatments are not byte-identical |
 | Windows CI | `windows-latest` | compiles the Core Audio backend; runs the fake-backend contract suite; anything requiring a real endpoint is not exercised here |
 | **Physical Windows** | maintainer hardware | not yet executed — see [`validation-checklist.md`](./validation-checklist.md) |
