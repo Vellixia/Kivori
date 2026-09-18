@@ -175,6 +175,9 @@ pub mod physical_st7789 {
     /// * GPIO2 and GPIO8 are strapping pins and already taken (D/C, backlight); GPIO0/GPIO1 are
     ///   the XTAL_32K pair and unusable if a 32.768 kHz crystal is fitted; GPIO20/GPIO21 are left
     ///   free so the UART0 boot console stays available.
+    /// * **Known tradeoff:** only GPIO0-5 can wake the C3 from deep sleep, so `sw` on GPIO10
+    ///   cannot. Kivori's Display Sleep is panel blanking with the MCU awake, so this is outside
+    ///   the MVP contract; if deep-sleep wake is ever wanted, `sw` moves to GPIO1.
     ///
     /// The three lines are wired active-low (HW-040 COM to GND) and read with internal pull-ups;
     /// the adapter in `physical_rotary` inverts them to logical levels.

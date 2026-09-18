@@ -33,12 +33,15 @@ build:
 fw-check:
     cd firmware/esp32-c3 && cargo build -p kivori-model -p kivori-protocol -p kivori-framebuffer -p kivori-renderer -p kivori-assets
 
-# The flashable binary needs `--features embedded`: the bin target declares it in `required-features`, so a
-# plain `cargo build --release` silently builds only the library and produces NO binary.
+# The flashable binary needs `--features embedded` at minimum: the bin target declares it in
+# `required-features`, so a plain `cargo build --release` silently builds only the library and
+# produces NO binary. `embedded` alone only selects main.rs's bare fallback mode (clock + serial,
+# no display, no input) — the shipped product firmware needs `physical-st7789` (which enables
+# `embedded` transitively via Cargo.toml), so that is the default here.
 
-# Build the flashable RISC-V firmware binary.
+# Build the flashable RISC-V firmware binary (the physical ST7789 + rotary product runtime).
 fw-build:
-    cd firmware/esp32-c3 && cargo build --release --features embedded
+    cd firmware/esp32-c3 && cargo build --release --features physical-st7789
 
 # Host-side device-core tests (no hardware, no simulator).
 fw-test:
@@ -47,10 +50,12 @@ fw-test:
 # Flashes and monitors via the `espflash` runner in .cargo/config.toml.
 # The physical ESP32-C3 + ST7789 profile is verified in docs/validation-checklist.md; simulator profiles
 # remain separate evidence and are not substitutes for physical wiring/controller validation.
+# `--features physical-st7789` is required to select that runtime; `embedded` alone builds only
+# main.rs's bare fallback (no display, no input) and would silently flash non-product firmware.
 
-# Flash + monitor the verified physical board profile.
+# Flash + monitor the verified physical board profile (ST7789 + rotary product runtime).
 fw-flash:
-    cd firmware/esp32-c3 && cargo run --release --features embedded
+    cd firmware/esp32-c3 && cargo run --release --features physical-st7789
 
 # ---- Wokwi pre-hardware simulation gate (sim/wokwi/README.md) ----
 
