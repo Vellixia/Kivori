@@ -24,7 +24,17 @@ impl ProductSnapshot {
             failed: false,
         }
     }
+    /// A snapshot carrying one value update.
+    ///
+    /// A known failure carries no observable value, so it becomes [`Self::failed`] here rather
+    /// than an overlay painting a percent nothing ever set: known failure and unknown outcome MUST
+    /// stay distinct (user-story-contract invariant 4), and unavailability MUST be communicated
+    /// rather than silently substituted (invariant 19). Routing it at this single choke point
+    /// means every producer of a `ValueUpdate` is covered, not just the rotary path.
     pub const fn with_value(value: ValueUpdate) -> Self {
+        if value.failed {
+            return Self::failed();
+        }
         Self {
             value: Some(value),
             failed: false,

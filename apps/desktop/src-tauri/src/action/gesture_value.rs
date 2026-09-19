@@ -16,6 +16,15 @@ pub struct ValueUpdate {
     pub percent: u8,
     pub confidence: ValueConfidence,
     pub at_boundary: bool,
+    /// The action was attempted and is known to have failed.
+    ///
+    /// Known failure, known success and unknown outcome MUST stay distinct
+    /// (user-story-contract invariant 4), so this is carried out of `GestureValue`
+    /// separately from `confidence` — `Unverified` means "we could not observe the
+    /// result", never "it did not happen". When set, `percent` is the last value the
+    /// desktop actually knows about and MUST NOT be displayed as a volume: the
+    /// snapshot resolves to `PrimaryState::Error` with no overlay instead.
+    pub failed: bool,
 }
 
 #[derive(Debug, Default)]
@@ -53,20 +62,33 @@ impl GestureValue {
                     return None;
                 }
                 let (next, at_boundary) = apply_step(self.target, direction);
-                self.target = next;
 
                 let confidence = match execute_volume(backend, next) {
                     // A confirmed write still displays as Preview while the gesture
                     // owns the surface; it is promoted at gesture end.
                     Outcome::StateConfirmed { .. } => ValueConfidence::Preview,
+                    // Nothing happened — an unimplemented or unavailable backend is never
+                    // even written to. Do not advance the target and do not paint a percent
+                    // the desktop cannot observe (invariants 2 and 19); report the failure
+                    // as a failure (invariant 4).
+                    Outcome::Failed { .. } => {
+                        return Some(ValueUpdate {
+                            percent: self.target,
+                            confidence: ValueConfidence::Unverified,
+                            at_boundary: false,
+                            failed: true,
+                        })
+                    }
                     Outcome::TriggeredUnverified => ValueConfidence::Unverified,
                     _ => ValueConfidence::Unverified,
                 };
+                self.target = next;
 
                 Some(ValueUpdate {
                     percent: next,
                     confidence,
                     at_boundary,
+                    failed: false,
                 })
             }
             LogicalInput::GestureEnded { gesture_id } => {
@@ -84,6 +106,7 @@ impl GestureValue {
                     percent: observed,
                     confidence: ValueConfidence::Confirmed,
                     at_boundary: false,
+                    failed: false,
                 })
             }
         }
@@ -99,6 +122,7 @@ impl GestureValue {
             percent,
             confidence: ValueConfidence::Confirmed,
             at_boundary: false,
+            failed: false,
         })
     }
 
@@ -113,6 +137,7 @@ impl GestureValue {
             percent,
             confidence: ValueConfidence::Confirmed,
             at_boundary: false,
+            failed: false,
         })
     }
 }

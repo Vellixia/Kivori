@@ -215,6 +215,7 @@ fn preview(percent: u8) -> Option<ValueUpdate> {
         percent,
         confidence: ValueConfidence::Preview,
         at_boundary: false,
+        failed: false,
     })
 }
 
@@ -223,6 +224,7 @@ fn confirmed(percent: u8) -> Option<ValueUpdate> {
         percent,
         confidence: ValueConfidence::Confirmed,
         at_boundary: false,
+        failed: false,
     })
 }
 
@@ -452,6 +454,7 @@ fn a_value_update_becomes_a_transient_overlay_over_the_underlying_state() {
         percent: 60,
         confidence: ValueConfidence::Preview,
         at_boundary: false,
+        failed: false,
     }));
 
     let value = p.value.expect("overlay present");
@@ -472,4 +475,98 @@ fn a_failed_outcome_resolves_to_error_without_a_value_overlay() {
     let p = r.resolve(&ProductSnapshot::failed());
     assert_eq!(p.primary, PrimaryState::Error);
     assert_eq!(p.value, None);
+}
+
+#[test]
+fn a_detent_against_an_unimplemented_backend_emits_no_value_overlay() {
+    // macOS/Linux today: the backend is honest that it is not implemented, so `execute_volume`
+    // never even attempts a write. Turning the knob must therefore paint nothing at all — a
+    // dashed bar marching upward while nothing happens is state the desktop cannot observe
+    // (invariant 2) presented instead of unavailability (invariant 19).
+    let backend = kivori_desktop::platform::unimplemented::UnimplementedVolumeBackend::new("macos");
+    let mut gv = GestureValue::new();
+    let mut r = PresentationResolver::new(1);
+
+    gv.on_input(LogicalInput::GestureStarted { gesture_id: 1 }, &backend);
+
+    let mut percents = Vec::new();
+    for _ in 0..3 {
+        let update = gv
+            .on_input(
+                LogicalInput::Detent {
+                    gesture_id: 1,
+                    direction: Direction::Cw,
+                },
+                &backend,
+            )
+            .expect("a failure must be reported, not swallowed");
+        percents.push(update.percent);
+
+        let p = r.resolve(&ProductSnapshot::with_value(update));
+        assert_eq!(
+            p.value, None,
+            "no write was attempted, so no volume bar may be painted"
+        );
+        assert_eq!(p.transient_ms, 0, "there is no overlay to expire");
+    }
+    assert_eq!(
+        percents,
+        vec![0, 0, 0],
+        "the local target must not advance while nothing whatsoever has happened"
+    );
+}
+
+#[test]
+fn a_known_failure_reaches_error_through_the_production_path() {
+    // Invariant 4 is MUST-level: known success, known failure and unknown outcome stay distinct.
+    // This walks the same chain `runtime::device_task` walks — GestureValue -> ProductSnapshot ->
+    // PresentationResolver — so `PrimaryState::Error` has a real production producer, not only a
+    // resolver unit test that production can never reach.
+    let failing = FakeVolumeBackend::with_availability(ActionAvailability::RuntimeUnavailable {
+        reason: "no default render endpoint".to_string(),
+    });
+    let mut gv = GestureValue::new();
+    let mut r = PresentationResolver::new(1);
+
+    gv.on_input(LogicalInput::GestureStarted { gesture_id: 1 }, &failing);
+    let update = gv
+        .on_input(
+            LogicalInput::Detent {
+                gesture_id: 1,
+                direction: Direction::Cw,
+            },
+            &failing,
+        )
+        .expect("a known failure must be reported");
+    let p = r.resolve(&ProductSnapshot::with_value(update));
+    assert_eq!(
+        p.primary,
+        PrimaryState::Error,
+        "known failure must not collapse into unknown outcome"
+    );
+    assert_eq!(p.value, None);
+
+    // ...and an unobservable write stays distinct from that known failure.
+    let unverified = FakeVolumeBackend::unreadable_after_write(30);
+    let mut gv2 = GestureValue::new();
+    gv2.on_input(LogicalInput::GestureStarted { gesture_id: 1 }, &unverified);
+    let update = gv2
+        .on_input(
+            LogicalInput::Detent {
+                gesture_id: 1,
+                direction: Direction::Cw,
+            },
+            &unverified,
+        )
+        .expect("update");
+    let p = r.resolve(&ProductSnapshot::with_value(update));
+    assert_eq!(
+        p.primary,
+        PrimaryState::Idle,
+        "an unobservable write is not a known failure"
+    );
+    assert_eq!(
+        p.value.expect("overlay present").confidence,
+        ValueConfidence::Unverified
+    );
 }
