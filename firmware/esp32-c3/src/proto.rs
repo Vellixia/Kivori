@@ -300,6 +300,11 @@ impl Dispatcher {
                 // `Bye` was ever seen.
                 self.session_ended = true;
                 self.accepted_session = Some(hello.nonce);
+                // The previous session's capabilities do not carry over: they are re-established
+                // by the `Ready` that follows. Holding them across the gap would let a detent
+                // between this `Hello` and that `Ready` emit under a capability the new peer never
+                // negotiated — exactly what `link_lost` and the `Bye` arm already guard against.
+                self.negotiated_caps = Capabilities::NONE;
             }
             Message::Ready(ready) => {
                 // Intersect with what the device itself advertised: the desktop's `Ready` is

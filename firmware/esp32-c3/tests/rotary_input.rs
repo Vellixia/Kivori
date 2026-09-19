@@ -1353,3 +1353,66 @@ fn the_rotary_profile_does_not_collide_with_the_display_profile() {
     assert_ne!(ROTARY.clk, ROTARY.sw);
     assert_ne!(ROTARY.dt, ROTARY.sw);
 }
+
+#[test]
+fn a_reconnect_hello_clears_the_previous_sessions_capabilities() {
+    // A reconnect that never sent `Bye` arrives as a bare `Hello`. Between it and the `Ready`
+    // that follows, the device already holds the NEW session's nonce; if it also still held the
+    // OLD session's capabilities, a detent landing in that window would emit under a capability
+    // the new peer has not negotiated. `link_lost` and the `Bye` arm both clear it, and the
+    // field's own doc comment says it belongs to "the current session" — so `Hello` must too.
+    let mut pipe = SimPipe::new();
+    let mut device = DeviceState::new();
+    let mut dispatcher = handshaken(0x1111_2222);
+    assert!(
+        dispatcher.send_input_event(&mut pipe, 1, InputKind::GestureStarted, 0),
+        "precondition: the first session emits"
+    );
+    let _ = pipe.host_recv();
+
+    gating_host_write(
+        &mut pipe,
+        &Message::Hello(Hello {
+            desktop_version: FirmwareVersion {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            desktop_caps: Capabilities::PHYSICAL_INPUT_V1,
+            nonce: 0x3333_4444,
+        }),
+        2,
+    );
+    dispatcher
+        .poll(&mut pipe, &mut device, 0)
+        .expect("poll reconnect Hello");
+    assert_eq!(dispatcher.accepted_session(), Some(0x3333_4444));
+    let _ = pipe.host_recv(); // discard the HelloAck; only the capability gate matters here
+
+    let sent = dispatcher.send_input_event(&mut pipe, 2, InputKind::Detent(Direction::Cw), 1);
+    assert!(
+        !sent,
+        "the previous session's capabilities must not survive a reconnect Hello"
+    );
+    assert!(
+        gating_host_drain(&mut pipe).is_empty(),
+        "nothing may reach the wire between Hello and Ready"
+    );
+
+    // ...and the new session's own `Ready` re-establishes them.
+    gating_host_write(
+        &mut pipe,
+        &Message::Ready(Ready {
+            negotiated_minor: PROTOCOL_MINOR,
+            negotiated_caps: Capabilities::PHYSICAL_INPUT_V1,
+        }),
+        3,
+    );
+    dispatcher
+        .poll(&mut pipe, &mut device, 0)
+        .expect("poll Ready");
+    assert!(
+        dispatcher.send_input_event(&mut pipe, 2, InputKind::Detent(Direction::Cw), 2),
+        "the new session negotiated the capability, so it emits again"
+    );
+}
