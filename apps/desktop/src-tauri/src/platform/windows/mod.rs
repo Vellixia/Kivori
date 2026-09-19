@@ -255,15 +255,28 @@ fn audio_thread(
 
     // Drop (contract item 8): unregister both callbacks and CoUninitialize, all still on this
     // owning thread.
+    //
+    // ORDERING IS LOAD-BEARING, and invisible to the type system: every live COM interface must
+    // be released before `CoUninitialize` runs, or its `Release()` call lands on an apartment
+    // that no longer exists (undefined behaviour — this is what previously crashed CI with
+    // STATUS_ACCESS_VIOLATION). Release order below: endpoint volume + its callback, then the
+    // notification client, then the enumerator, and only then `CoUninitialize`. The unregister
+    // calls just below borrow `enumerator`/`notification_client` (they don't consume), so the
+    // explicit `drop()`s afterward are what actually releases them on this side of the
+    // `CoUninitialize` line — do NOT delete those `drop()` calls or go back to letting these two
+    // bindings fall off the end of the function, which reintroduces the crash.
     if let (Some(volume), Some(callback)) = (state.volume.take(), state.callback.take()) {
         // SAFETY: both were registered on this same thread above.
         let _ = unsafe { volume.UnregisterControlChangeNotify(&callback) };
     }
-    if let (Some(enumerator), Some(client)) = (&enumerator, &notification_client) {
+    if let (Some(enumerator), Some(client)) = (enumerator.as_ref(), notification_client.as_ref()) {
         // SAFETY: registered on this same thread above.
         let _ = unsafe { enumerator.UnregisterEndpointNotificationCallback(client) };
     }
-    // SAFETY: matches the `CoInitializeEx` call above, on the same thread.
+    drop(notification_client);
+    drop(enumerator);
+    // SAFETY: matches the `CoInitializeEx` call above, on the same thread; every COM interface
+    // above has been explicitly released by this point.
     unsafe { CoUninitialize() };
 }
 
