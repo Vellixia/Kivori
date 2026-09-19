@@ -4,10 +4,14 @@
 //! firmware (constitution Principle II). The Tauri command surface, connection manager, and window
 //! lifecycle are added in their feature phases; the binary (`main.rs`) wires them together.
 
+pub mod action;
 pub mod device;
 pub mod diagnostics;
+pub mod input;
 pub mod ipc;
 pub mod orchestrator;
+pub mod platform;
+pub mod presentation;
 pub mod render;
 pub mod runtime;
 pub mod window_lifecycle;

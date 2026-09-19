@@ -11,9 +11,11 @@
 use heapless::Vec as HVec;
 use kivori_asset_compiler::compile_default_blob;
 use kivori_assets::AssetBlob;
+use kivori_firmware::ports::InputSource;
 use kivori_firmware::proto::DeviceIdentity;
 use kivori_firmware::runtime::{Runtime, RuntimeConfig, Tick};
 use kivori_firmware::sim::{CaptureDisplay, SimPipe, VirtualClock};
+use kivori_model::input::InputLevels;
 use kivori_model::{Capabilities, CompanionState, ProtocolVersion, SendableState};
 use kivori_protocol::{
     decode_message, encode_message, Bye, ByeReason, ErrorCategory, FirmwareVersion, Hello, Message,
@@ -59,11 +61,26 @@ fn host_drain(pipe: &mut SimPipe) -> Vec<Message> {
     messages
 }
 
-/// The whole test rig: runtime plus its three ports and the compiled asset blob.
+/// A stub input source: this suite exercises the protocol/lifecycle/render loop, not physical
+/// input, so it always reports no motion (Task 4 wires the port; Task 13 replaces it on device).
+struct NoInput;
+
+impl InputSource for NoInput {
+    fn sample(&mut self) -> InputLevels {
+        InputLevels {
+            a: false,
+            b: false,
+            sw: false,
+        }
+    }
+}
+
+/// The whole test rig: runtime plus its four ports and the compiled asset blob.
 struct Harness {
     runtime: Runtime,
     clock: VirtualClock,
     pipe: SimPipe,
+    input: NoInput,
     display: Box<CaptureDisplay>,
     blob_bytes: Vec<u8>,
 }
@@ -74,6 +91,7 @@ impl Harness {
             runtime: Runtime::new(identity(), RuntimeConfig::default()),
             clock: VirtualClock::new(),
             pipe: SimPipe::new(),
+            input: NoInput,
             display: Box::new(CaptureDisplay::new()),
             blob_bytes: compile_default_blob(),
         }
@@ -82,8 +100,13 @@ impl Harness {
     /// One production tick at the current virtual time.
     fn step(&mut self) -> Tick {
         let blob = AssetBlob::parse(&self.blob_bytes).expect("valid blob");
-        self.runtime
-            .step(&self.clock, &mut self.pipe, self.display.as_mut(), &blob)
+        self.runtime.step(
+            &self.clock,
+            &mut self.pipe,
+            &mut self.input,
+            self.display.as_mut(),
+            &blob,
+        )
     }
 
     /// Advances the clock past the frame interval and ticks.

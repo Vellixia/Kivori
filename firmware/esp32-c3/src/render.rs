@@ -8,7 +8,9 @@
 use crate::ports::DisplaySink;
 use kivori_assets::AssetBlob;
 use kivori_framebuffer::{hash_rgb565, TileBand};
+use kivori_model::presentation::ValueDisplay;
 use kivori_model::{CompanionState, ElapsedMs, Rect, Rgb565};
+use kivori_renderer::overlay::render_volume_overlay;
 use kivori_renderer::render_scene;
 
 /// Tile width (full panel width).
@@ -68,12 +70,38 @@ impl TileRenderer {
         elapsed_ms: ElapsedMs,
         sink: &mut S,
     ) -> Result<(), RenderError<S::Error>> {
+        self.render_with_overlay(blob, state, elapsed_ms, None, sink)
+    }
+
+    /// Renders `state` at `elapsed_ms` from `blob`, compositing `overlay` (if any) as the final
+    /// pass so it is included in the hash that decides which tiles are flushed, then flushes only
+    /// changed tiles to `sink`.
+    ///
+    /// # Errors
+    /// [`RenderError`] if the scene is missing, a tile can't be built, the compositor fails, or the
+    /// sink errors.
+    pub fn render_with_overlay<S: DisplaySink>(
+        &mut self,
+        blob: &AssetBlob,
+        state: CompanionState,
+        elapsed_ms: ElapsedMs,
+        overlay: Option<ValueDisplay>,
+        sink: &mut S,
+    ) -> Result<(), RenderError<S::Error>> {
         let scene = blob.scene(state).ok_or(RenderError::MissingScene)?;
         for tile in 0..TILE_COUNT {
             let rect = Rect::new(0, tile as u16 * TILE_H, TILE_W, TILE_H);
             let mut band = TileBand::new(rect, &mut self.buf).ok_or(RenderError::Band)?;
             render_scene(blob, scene, elapsed_ms, &mut band)
                 .map_err(|_| RenderError::Compositor)?;
+            if let Some(value) = overlay {
+                render_volume_overlay(
+                    &mut band,
+                    value.current_percent,
+                    value.confidence,
+                    value.at_boundary,
+                );
+            }
             let signature = hash_rgb565(band.pixels());
             if self.signatures[tile] != Some(signature) {
                 sink.blit_tile(rect, band.pixels())

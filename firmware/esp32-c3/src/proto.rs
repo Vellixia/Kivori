@@ -10,8 +10,9 @@ use crate::state::{DeviceEvent, DeviceState};
 use heapless::Vec;
 use kivori_model::{Capabilities, ProtocolVersion};
 use kivori_protocol::{
-    decode_message, encode_message, DeviceId, FirmwareVersion, HelloAck, Message, SeqClass,
-    SequenceTracker, StateReport, MAX_FRAME, MAX_WIRE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
+    decode_message, encode_message, ControlId, DeviceId, FirmwareVersion, HelloAck, InputEvent,
+    InputKind, Message, Nonce, Presentation, SeqClass, SequenceTracker, StateReport, MAX_FRAME,
+    MAX_WIRE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
 };
 
 /// Inbound accumulation capacity: room for a partial packet plus one full wire packet.
@@ -54,6 +55,22 @@ pub struct Dispatcher {
     hello_acks: u32,
     pongs: u32,
     state_reports: u32,
+    /// The session nonce accepted at the last `Hello`, or `None` before any handshake / after
+    /// `Bye`/link loss. The only session an emitted `InputEvent` may claim.
+    accepted_session: Option<Nonce>,
+    /// The capability set negotiated for the current session (set from `Ready`; the protocol
+    /// crate itself is capability-blind, so this is the dispatcher's own gate).
+    negotiated_caps: Capabilities,
+    /// Set when a session boundary just occurred — `Bye`, a transport failure ([`Self::link_lost`]),
+    /// or a new `Hello` (a reconnect that never sent `Bye`) — so the caller can reset any input
+    /// state (the decoder/gesture layers) that must not survive it. Single-slot, like `pending`:
+    /// consumed once via [`Self::take_session_ended`].
+    session_ended: bool,
+    /// One pending accepted `Presentation`, until [`Self::take_presentation`] drains it (the
+    /// runtime does so every tick, so nothing here is ever silently overwritten unseen). Only ever
+    /// set when `PRESENTATION_V1` is negotiated — an unnegotiated capability leaves this field
+    /// permanently empty, never merely unread.
+    pending_presentation: Option<Presentation>,
 }
 
 impl Dispatcher {
@@ -71,6 +88,10 @@ impl Dispatcher {
             hello_acks: 0,
             pongs: 0,
             state_reports: 0,
+            accepted_session: None,
+            negotiated_caps: Capabilities::NONE,
+            session_ended: false,
+            pending_presentation: None,
         }
     }
 
@@ -98,6 +119,46 @@ impl Dispatcher {
         self.rejected
     }
 
+    /// The session nonce accepted at the last `Hello`, or `None` before any handshake, after
+    /// `Bye`, or after a link loss.
+    #[must_use]
+    pub const fn accepted_session(&self) -> Option<Nonce> {
+        self.accepted_session
+    }
+
+    /// Encode one input event. Returns `false` when the capability is not negotiated
+    /// or no session is accepted — an unnegotiated capability MUST stay inert.
+    pub fn send_input_event<T: Transport>(
+        &mut self,
+        transport: &mut T,
+        gesture_id: u16,
+        kind: InputKind,
+        device_ms: u32,
+    ) -> bool {
+        if !self
+            .negotiated_caps
+            .contains(Capabilities::PHYSICAL_INPUT_V1)
+        {
+            return false;
+        }
+        let Some(session) = self.accepted_session else {
+            return false;
+        };
+        let msg = Message::InputEvent(InputEvent {
+            session,
+            gesture_id,
+            control: ControlId::Rotary,
+            kind,
+            device_ms,
+        });
+        self.send(transport, &msg).is_ok()
+    }
+
+    /// Takes the pending accepted `Presentation`, if any (see [`Self::pending_presentation`]).
+    pub fn take_presentation(&mut self) -> Option<Presentation> {
+        self.pending_presentation.take()
+    }
+
     /// Takes the pending safe diagnostic, if any. The caller decides whether to transmit it.
     pub fn take_diagnostic(&mut self) -> Option<DeviceDiagnostic> {
         self.pending.take()
@@ -106,6 +167,26 @@ impl Dispatcher {
     /// Records an allowlisted diagnostic for the caller to pick up (e.g. a display fault the run loop saw).
     pub fn note_diagnostic(&mut self, diagnostic: DeviceDiagnostic) {
         self.pending = Some(diagnostic);
+    }
+
+    /// Takes the "a session boundary just occurred" flag, if set (`Bye`, link loss, or a new
+    /// `Hello`), so the caller can reset session-scoped input state exactly once per boundary.
+    pub fn take_session_ended(&mut self) -> bool {
+        core::mem::take(&mut self.session_ended)
+    }
+
+    /// Clears session state after a transport failure, exactly like `Bye` minus the diagnostic
+    /// (the caller already reports its own `LinkLost`/failure diagnostic for a transport error).
+    ///
+    /// Without this, a link drop that is never followed by an explicit `Bye` (e.g. a desktop
+    /// crash or a yanked cable) would leave `accepted_session`/`negotiated_caps` — and therefore
+    /// the caller's decoder/gesture state — exactly as they were, letting a gesture opened before
+    /// the drop keep emitting under the stale session once the link recovers.
+    pub fn link_lost(&mut self) {
+        self.tracker = SequenceTracker::new();
+        self.accepted_session = None;
+        self.negotiated_caps = Capabilities::NONE;
+        self.session_ended = true;
     }
 
     /// Encodes and writes a device-originated message (`Health`, `Diagnostic`) on the session's sequence.
@@ -212,6 +293,26 @@ impl Dispatcher {
                 };
                 self.send(transport, &Message::HelloAck(ack))?;
                 self.hello_acks = self.hello_acks.saturating_add(1);
+                // A new `Hello` always starts a fresh session, whether or not the previous one
+                // ended with a `Bye` (a reconnect after a desktop crash never sends one). Flag the
+                // boundary BEFORE recording the new nonce, so the caller resets input state (a
+                // gesture from the old session must never complete in the new one) even when no
+                // `Bye` was ever seen.
+                self.session_ended = true;
+                self.accepted_session = Some(hello.nonce);
+                // The previous session's capabilities do not carry over: they are re-established
+                // by the `Ready` that follows. Holding them across the gap would let a detent
+                // between this `Hello` and that `Ready` emit under a capability the new peer never
+                // negotiated — exactly what `link_lost` and the `Bye` arm already guard against.
+                self.negotiated_caps = Capabilities::NONE;
+            }
+            Message::Ready(ready) => {
+                // Intersect with what the device itself advertised: the desktop's `Ready` is
+                // untrusted input, and an unnegotiated (or never-advertised) capability MUST NOT
+                // activate behavior even if a buggy or hostile peer claims otherwise.
+                self.negotiated_caps = ready
+                    .negotiated_caps
+                    .intersection(self.identity.capabilities);
             }
             Message::SetState(set) => {
                 if let Some(now) = device.apply(DeviceEvent::SetState(set.desired)) {
@@ -227,13 +328,26 @@ impl Dispatcher {
                 self.send(transport, &Message::Pong(build_pong(ping.t_ms, now_ms)))?;
                 self.pongs = self.pongs.saturating_add(1);
             }
+            Message::Presentation(presentation) => {
+                // An unnegotiated capability MUST stay completely inert: drop it exactly like any
+                // message kind this device does not act on (the `_` arm below) — no diagnostic,
+                // no render.
+                if self.negotiated_caps.contains(Capabilities::PRESENTATION_V1) {
+                    self.pending_presentation = Some(presentation);
+                }
+            }
             Message::Bye(_) => {
                 // Session closed: drop the link and reset sequence tracking for the next session.
                 let _ = device.apply(DeviceEvent::LinkDown);
                 self.tracker = SequenceTracker::new();
                 self.pending = Some(DeviceDiagnostic::LinkLost);
+                // A gesture (or partial motion) from the old session must never complete in a new
+                // one, so the caller resets its input state too (invariant: no stale replay).
+                self.accepted_session = None;
+                self.negotiated_caps = Capabilities::NONE;
+                self.session_ended = true;
             }
-            // `Ready` and the device→desktop message kinds are not acted on by the device.
+            // The device→desktop message kinds are not acted on by the device.
             _ => {}
         }
         Ok(())

@@ -43,7 +43,7 @@ fn identity() -> DeviceIdentity {
             minor: 0,
             patch: 0,
         },
-        capabilities: Capabilities::NONE,
+        capabilities: Capabilities::PHYSICAL_INPUT_V1.union(Capabilities::PRESENTATION_V1),
     }
 }
 
@@ -146,7 +146,7 @@ pub fn run<C: Clock>(clock: &C) -> bool {
             );
             check(
                 &mut pass,
-                ack.device_caps == Capabilities::NONE,
+                ack.device_caps == identity().capabilities,
                 "capability-advertised",
             );
         }
