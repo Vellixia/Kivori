@@ -280,7 +280,14 @@ fn reset_closes_the_gesture_silently_and_restarts_numbering() {
     assert_eq!(started, Some(RotaryEvent::GestureStarted { gesture_id: 1 }));
 }
 
-use kivori_firmware::sim::ScriptedInput;
+use heapless::Vec as FixedVec;
+use kivori_firmware::sim::{ScriptedInput, SCRIPT_CAPACITY};
+
+/// The sim helpers take fixed-capacity level scripts (the sim module is `no_std` so it stays
+/// buildable for the device target); this keeps the scenarios below as readable as `vec![...]`.
+fn script<const N: usize>(levels: [InputLevels; N]) -> FixedVec<InputLevels, SCRIPT_CAPACITY> {
+    FixedVec::from_slice(&levels).expect("scenario fits SCRIPT_CAPACITY")
+}
 use kivori_model::input::InputLevels;
 
 fn lv(a: bool, b: bool) -> InputLevels {
@@ -291,7 +298,7 @@ fn lv(a: bool, b: bool) -> InputLevels {
 fn scripted_input_source_replays_levels_then_holds_the_last() {
     use kivori_firmware::ports::InputSource;
 
-    let mut src = ScriptedInput::new(vec![lv(false, false), lv(false, true)]);
+    let mut src = ScriptedInput::new(script([lv(false, false), lv(false, true)]));
     assert_eq!(src.sample(), lv(false, false));
     assert_eq!(src.sample(), lv(false, true));
     // Exhausted scripts hold the final level rather than wrapping or panicking.
@@ -303,17 +310,17 @@ fn a_full_cw_cycle_through_the_port_produces_started_detent_ended() {
     use kivori_firmware::sim::{drive_rotary, SeenInput};
 
     // Host-sim end-to-end: scripted levels -> validated detent -> emitted event stream.
-    let levels = vec![
+    let levels = script([
         lv(false, false),
         lv(false, true),
         lv(true, true),
         lv(true, false),
         lv(false, false),
-    ];
+    ]);
 
     assert_eq!(
-        drive_rotary(levels),
-        vec![
+        drive_rotary(levels).as_slice(),
+        [
             SeenInput::GestureStarted { gesture_id: 1 },
             SeenInput::Detent {
                 gesture_id: 1,
@@ -328,25 +335,27 @@ fn a_full_cw_cycle_through_the_port_produces_started_detent_ended() {
 fn a_reversal_stays_in_one_gesture_and_reports_both_directions() {
     use kivori_firmware::sim::{drive_rotary, SeenInput};
 
-    let mut levels = vec![
+    let mut levels = script([
         // one CW detent
         lv(false, false),
         lv(false, true),
         lv(true, true),
         lv(true, false),
         lv(false, false),
-    ];
-    // then one CCW detent, back the way it came
-    levels.extend_from_slice(&[
-        lv(true, false),
-        lv(true, true),
-        lv(false, true),
-        lv(false, false),
     ]);
+    // then one CCW detent, back the way it came
+    levels
+        .extend_from_slice(&[
+            lv(true, false),
+            lv(true, true),
+            lv(false, true),
+            lv(false, false),
+        ])
+        .expect("scenario fits SCRIPT_CAPACITY");
 
     assert_eq!(
-        drive_rotary(levels),
-        vec![
+        drive_rotary(levels).as_slice(),
+        [
             SeenInput::GestureStarted { gesture_id: 1 },
             SeenInput::Detent {
                 gesture_id: 1,
@@ -622,14 +631,14 @@ impl Transport for FlakyTransport<'_> {
 }
 
 /// One full CW detent cycle as a level script: 00 -> 01 -> 11 -> 10 -> 00.
-fn cw_cycle_levels() -> Vec<InputLevels> {
-    vec![
+fn cw_cycle_levels() -> FixedVec<InputLevels, SCRIPT_CAPACITY> {
+    script([
         lv(false, false),
         lv(false, true),
         lv(true, true),
         lv(true, false),
         lv(false, false),
-    ]
+    ])
 }
 
 #[test]
@@ -640,7 +649,7 @@ fn a_gesture_open_before_bye_cannot_be_silently_continued_after_reconnecting() {
     let mut display = CaptureDisplay::new();
     let blob_bytes = compile_default_blob();
     let blob = AssetBlob::parse(&blob_bytes).expect("valid blob");
-    let mut idle = ScriptedInput::new(vec![lv(false, false)]);
+    let mut idle = ScriptedInput::new(script([lv(false, false)]));
 
     // Session A: handshake, negotiating PHYSICAL_INPUT_V1.
     gating_host_write(
@@ -756,7 +765,7 @@ fn a_gesture_open_on_reconnect_without_bye_cannot_be_silently_continued() {
     let mut display = CaptureDisplay::new();
     let blob_bytes = compile_default_blob();
     let blob = AssetBlob::parse(&blob_bytes).expect("valid blob");
-    let mut idle = ScriptedInput::new(vec![lv(false, false)]);
+    let mut idle = ScriptedInput::new(script([lv(false, false)]));
 
     // Session A: handshake, negotiating PHYSICAL_INPUT_V1.
     gating_host_write(
@@ -855,7 +864,7 @@ fn a_gesture_open_before_link_loss_cannot_be_silently_continued_after_reconnecti
     let mut display = CaptureDisplay::new();
     let blob_bytes = compile_default_blob();
     let blob = AssetBlob::parse(&blob_bytes).expect("valid blob");
-    let mut idle = ScriptedInput::new(vec![lv(false, false)]);
+    let mut idle = ScriptedInput::new(script([lv(false, false)]));
     let fail_next_read = Cell::new(false);
 
     // Session A: handshake, negotiating PHYSICAL_INPUT_V1.
@@ -1199,7 +1208,7 @@ fn a_negotiated_presentation_reaches_the_panel_as_a_real_tile_flush() {
     let mut display = CaptureDisplay::new();
     let blob_bytes = compile_default_blob();
     let blob = AssetBlob::parse(&blob_bytes).expect("valid blob");
-    let mut idle = ScriptedInput::new(vec![lv(false, false)]);
+    let mut idle = ScriptedInput::new(script([lv(false, false)]));
     let nonce: Nonce = 0xC0DE_0001;
 
     gating_host_write(
@@ -1251,7 +1260,7 @@ fn an_unnegotiated_presentation_never_reaches_the_panel() {
     let mut display = CaptureDisplay::new();
     let blob_bytes = compile_default_blob();
     let blob = AssetBlob::parse(&blob_bytes).expect("valid blob");
-    let mut idle = ScriptedInput::new(vec![lv(false, false)]);
+    let mut idle = ScriptedInput::new(script([lv(false, false)]));
     let nonce: Nonce = 0xC0DE_0002;
 
     gating_host_write(

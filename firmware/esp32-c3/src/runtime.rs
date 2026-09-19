@@ -43,7 +43,7 @@ use kivori_protocol::{InputKind, Message, Nonce, Presentation};
 /// Inactivity window, in milliseconds, after which an open rotary gesture ends
 /// (user-story-contract section 5). Firmware-wide: both the production runtime and the host-sim
 /// scenario helper (`sim::drive_rotary`) commit to this same boundary.
-const GESTURE_END_MS: u32 = 250;
+pub const GESTURE_END_MS: u32 = 250;
 
 /// Loop timings. Both are integer milliseconds, so behaviour is deterministic (ADR-0003).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

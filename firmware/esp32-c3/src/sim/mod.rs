@@ -2,16 +2,11 @@
 //! virtual clock. Together they let the entire device core run and be asserted on the host with no
 //! hardware (FR-035).
 
-// This module only ever compiles for the host target (the `host-sim` feature is never enabled
-// alongside the `embedded`/`wokwi*` no_std device build), so `ScriptedInput` and `drive_rotary` —
-// test-support types whose callers pass ordinary `vec![...]` literals — may use real `std::vec::Vec`
-// rather than a fixed-capacity `heapless::Vec`, even though the crate itself is `#![no_std]`.
-extern crate std;
-
 use crate::input::gesture::{RotaryEvent, RotaryGesture};
 use crate::input::quadrature::QuadratureDecoder;
 use crate::ports::{Clock, DisplaySink, InputSource, Transport};
 use crate::proto::{DeviceIdentity, Dispatcher};
+use crate::runtime::GESTURE_END_MS;
 use crate::state::DeviceState;
 use core::cell::Cell;
 use core::convert::Infallible;
@@ -22,7 +17,6 @@ use kivori_protocol::{
     encode_message, FirmwareVersion, Hello, Message, Nonce, Ready, MAX_WIRE, PROTOCOL_MAJOR,
     PROTOCOL_MINOR,
 };
-use std::vec::Vec as StdVec;
 
 /// Byte capacity of each direction of the simulated pipe.
 pub const PIPE_CAPACITY: usize = 8192;
@@ -32,6 +26,15 @@ pub const FRAME_W: usize = 240;
 pub const FRAME_H: usize = 240;
 /// Simulated panel pixel count.
 pub const FRAME_PIXELS: usize = FRAME_W * FRAME_H;
+/// Capacity of a [`ScriptedInput`] level script and of the [`drive_rotary`] event log.
+///
+/// The crate is `#![no_std]` and the sim module must stay buildable for the device target — the
+/// positive control in `scripts/check-release-surface.sh` compiles `--features host-sim` for
+/// `riscv32imc` to prove these adapters *would* be visible if they leaked — so these helpers use a
+/// fixed-capacity [`heapless::Vec`] rather than `std::vec::Vec`. The longest scenario in the
+/// firmware test suite is a two-detent reversal: 9 levels producing 4 events. 32 leaves ample
+/// headroom; overflowing it panics loudly rather than silently truncating a scenario.
+pub const SCRIPT_CAPACITY: usize = 32;
 
 /// A bidirectional in-memory byte pipe. The device sees it as a [`Transport`]; the test plays the
 /// host role via [`SimPipe::host_send`] / [`SimPipe::host_recv`].
@@ -190,7 +193,7 @@ impl Clock for VirtualClock {
 
 /// Replays a fixed level sequence, then holds the final level forever.
 pub struct ScriptedInput {
-    steps: StdVec<InputLevels>,
+    steps: Vec<InputLevels, SCRIPT_CAPACITY>,
     index: usize,
 }
 
@@ -200,7 +203,7 @@ impl ScriptedInput {
     /// # Panics
     /// Panics if `steps` is empty — a scripted source with nothing to replay is a test bug.
     #[must_use]
-    pub fn new(steps: StdVec<InputLevels>) -> Self {
+    pub fn new(steps: Vec<InputLevels, SCRIPT_CAPACITY>) -> Self {
         assert!(!steps.is_empty(), "ScriptedInput needs at least one level");
         Self { steps, index: 0 }
     }
@@ -241,20 +244,25 @@ pub enum SeenInput {
 /// Drive decoder + gesture over a level script and collect the emitted events.
 ///
 /// Each level consumes 1 ms; the clock then advances past the gesture window so a
-/// trailing `GestureEnded` is produced deterministically.
-pub fn drive_rotary(levels: StdVec<InputLevels>) -> StdVec<SeenInput> {
-    const GESTURE_END_MS: u32 = 250;
+/// trailing `GestureEnded` is produced deterministically. The window is the production
+/// [`GESTURE_END_MS`], not a local copy, so retuning the runtime retunes this helper with it.
+///
+/// # Panics
+/// Panics if more than [`SCRIPT_CAPACITY`] events are produced — a scenario that outgrew the
+/// fixed capacity is a test bug, and truncating it silently would make the assertion vacuous.
+pub fn drive_rotary(levels: Vec<InputLevels, SCRIPT_CAPACITY>) -> Vec<SeenInput, SCRIPT_CAPACITY> {
     let mut decoder = QuadratureDecoder::new();
     let mut gesture = RotaryGesture::new(GESTURE_END_MS);
     let mut src = ScriptedInput::new(levels.clone());
-    let mut out = StdVec::new();
+    let mut out = Vec::new();
 
     for tick in 0..levels.len() as u32 {
         let l = src.sample();
         if let Some(direction) = decoder.update(l.a, l.b) {
             let (started, detent) = gesture.on_detent(direction, tick);
             if let Some(RotaryEvent::GestureStarted { gesture_id }) = started {
-                out.push(SeenInput::GestureStarted { gesture_id });
+                out.push(SeenInput::GestureStarted { gesture_id })
+                    .expect("SCRIPT_CAPACITY");
             }
             if let RotaryEvent::Detent {
                 gesture_id,
@@ -264,14 +272,16 @@ pub fn drive_rotary(levels: StdVec<InputLevels>) -> StdVec<SeenInput> {
                 out.push(SeenInput::Detent {
                     gesture_id,
                     direction,
-                });
+                })
+                .expect("SCRIPT_CAPACITY");
             }
         }
     }
 
     let end_at = levels.len() as u32 + GESTURE_END_MS;
     if let Some(RotaryEvent::GestureEnded { gesture_id }) = gesture.poll(end_at) {
-        out.push(SeenInput::GestureEnded { gesture_id });
+        out.push(SeenInput::GestureEnded { gesture_id })
+            .expect("SCRIPT_CAPACITY");
     }
     out
 }
