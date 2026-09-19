@@ -209,6 +209,11 @@ fn bad_nonce_fails_the_handshake() {
         ConnectionState::Error,
         "unconfirmed identity → error"
     );
+    assert_eq!(
+        session.current_session(),
+        None,
+        "a failed handshake leaves no session identity behind"
+    );
 }
 
 #[test]
@@ -442,14 +447,22 @@ fn a_stray_unsupported_major_frame_after_connect_is_dropped_and_session_identity
 }
 
 /// Unlike an unsupported major, a bad nonce is NOT caught by `decode_message` (which only checks
-/// the protocol major) — the frame decodes fine and reaches `evaluate_hello_ack`, so this exercises
-/// the real `BadNonce` clearing site (`session.rs`, `HandshakeOutcome::BadNonce`) through the
-/// public wire path.
+/// the protocol major) — the frame decodes fine and reaches `evaluate_hello_ack`.
+///
+/// This test previously asserted the opposite of what it asserts now: that a stray bad-nonce
+/// `HelloAck` arriving AFTER the handshake clears the live session. That was the defect, not the
+/// contract. Protocol contract section 8 requires a message invalid for the current phase to be
+/// rejected, and the handshake phase is over once `Connected` is reached — so the ack is
+/// unsolicited and must be ignored, never re-evaluated as a handshake where a nonce mismatch
+/// tears down session identity, capabilities and any open gesture. The `BadNonce` clearing site
+/// itself stays covered by `bad_nonce_fails_the_handshake`, where it is still reachable.
 #[test]
-fn current_session_is_cleared_by_a_stray_bad_nonce_hello_ack_after_connect() {
+fn a_stray_hello_ack_while_connected_does_not_tear_down_the_session() {
     let (mut link, mut session, mut manager, mut orch) = connect(SendableState::Idle);
     assert_eq!(manager.state(), ConnectionState::Connected);
-    assert!(session.current_session().is_some());
+    let established = session.current_session().expect("handshake accepted");
+    let caps = session.negotiated_caps();
+    let _ = desktop_drain(&mut link); // clear the connect traffic
 
     // A stray HelloAck echoing the wrong nonce (it can never match the original Hello's nonce).
     device_push(&mut link, &device_ack(0xBAD_BAD), wire_version(), 1);
@@ -458,9 +471,19 @@ fn current_session_is_cleared_by_a_stray_bad_nonce_hello_ack_after_connect() {
         .expect("pump");
 
     assert_eq!(
+        manager.state(),
+        ConnectionState::Connected,
+        "a stray HelloAck must not tear down a healthy session"
+    );
+    assert_eq!(
         session.current_session(),
-        None,
-        "a stray bad-nonce HelloAck must clear the live session identity"
+        Some(established),
+        "the live session identity survives an unsolicited ack"
+    );
+    assert_eq!(session.negotiated_caps(), caps, "capabilities survive");
+    assert!(
+        desktop_drain(&mut link).is_empty(),
+        "an unsolicited HelloAck is ignored, not answered"
     );
 }
 

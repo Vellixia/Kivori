@@ -308,6 +308,13 @@ impl Session {
                         // Session identity is scoped to this connection: the nonce we sent becomes
                         // the current session only once the handshake is accepted.
                         self.current_session = Some(sent.nonce);
+                        // The handshake is over. Retiring the outstanding `Hello` makes any later
+                        // `HelloAck` fall through the `else` above and be ignored as unsolicited,
+                        // as protocol contract section 8 requires of a message invalid for the
+                        // current phase. Left set, a stray or duplicate ack would be re-evaluated
+                        // as a handshake and a nonce mismatch would take the `BadNonce` arm below,
+                        // tearing down a live session mid-gesture.
+                        self.sent_hello = None;
                         self.negotiated_caps = ready.negotiated_caps;
                         manager.apply(ManagerEvent::HandshakeOk(summarize(&ack, device_version)));
                         self.send(link, &Message::Ready(ready))?;
