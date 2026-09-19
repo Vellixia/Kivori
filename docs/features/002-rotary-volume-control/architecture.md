@@ -198,13 +198,17 @@ byte-identical.
 
 These are **tuning parameters, not settled constants** — each has a provisional value chosen without
 physical hardware, and each is paired with the checklist item that must measure it before it can be
-called validated. See [`validation-checklist.md`](./validation-checklist.md).
+called validated. The rotary-input measurement items are
+[`validation-checklist.md`](./validation-checklist.md) **rows 1–4** (the "Hardware — rotary input
+fidelity" section); "Measured by" below cites those row numbers. An earlier revision of this table
+cited an "HW-validation" numbered list that exists nowhere in `docs/` and, read as checklist rows,
+pointed at the Windows-flyout checks (rows 5 and 6) instead.
 
 | Parameter | Where | Provisional | Measured by |
 |---|---|---|---|
-| A/B sample interval | `Runtime::step` cadence | every runtime tick | HW-validation #1, #5 |
-| detent qualification depth | `QUARTER_STEPS_PER_DETENT` | 4 (full step) | HW-validation #2 |
-| invalid-transition threshold | `QuadratureDecoder::invalid_transitions` | diagnostic only, no threshold action | HW-validation #6 |
+| A/B sample interval | `Runtime::step` cadence | every runtime tick | checklist rows 2, 3 (no lost detents when slow, no false reversals when fast) |
+| detent qualification depth | `QUARTER_STEPS_PER_DETENT` | 4 (full step) | checklist rows 1, 4 (one detent = one step; bounce produces no phantom detents) |
+| invalid-transition threshold | `QuadratureDecoder::invalid_transitions` | diagnostic only, no threshold action | checklist row 4 (counter stays low) |
 | gesture-end inactivity | `RotaryGesture::new` (`GESTURE_END_MS`) | 250 ms | contract §5 |
 | base step | `BASE_STEP_PERCENT` | 2 points/detent | UX tuning |
 | value transient | `VALUE_TRANSIENT_MS` | 800 ms | contract §5 |

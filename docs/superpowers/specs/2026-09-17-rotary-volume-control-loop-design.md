@@ -100,7 +100,7 @@ Consequences that follow directly, and which the tests assert:
 - Detents the hardware did not observe are never reconstructed (invariant 42). Missing input is not failed input; it never produces Error.
 - Invalid-transition counts are recorded as diagnostics, never converted into motion.
 
-**`gesture.rs`** consumes validated detents plus the clock and owns gesture identity: a gesture opens on the first detent, and closes after **250 ms without a new detent** (contract §5 timing reference). `gesture_id` is a free-running `u16` from boot, **never reset per session** — see §4.1.
+**`gesture.rs`** consumes validated detents plus the clock and owns gesture identity: a gesture opens on the first detent, and closes after **250 ms without a new detent** (contract §5 timing reference). `gesture_id` is a `u16` that is **reset per session**: `RotaryGesture::reset` restarts numbering at 1 whenever a session boundary closes the input state (§4.1 rule 5), so ids need only be unique *within* a session — which is exactly what §4.1 relies on. An earlier revision of this section called it free-running from boot and never reset; that contradicted §4.1 and the implementation, and session-scoped numbering is the safer of the two (it removes `u16` wraparound as a correctness concern entirely rather than merely demoting it).
 
 ### 3. Tuning constants are hardware-validation parameters
 
@@ -108,9 +108,9 @@ Gathered into one `InputTuning` struct with provisional defaults, each annotated
 
 | Parameter | Provisional | Measured by |
 |---|---|---|
-| A/B sample interval | per runtime tick, bounded by clock | HW-validation #1, #5 |
-| detent qualification | full-step | HW-validation #2 |
-| invalid-transition threshold | diagnostic only | HW-validation #6 |
+| A/B sample interval | per runtime tick, bounded by clock | validation-checklist rows 2, 3 |
+| detent qualification | full-step | validation-checklist rows 1, 4 |
+| invalid-transition threshold | diagnostic only | validation-checklist row 4 |
 | gesture-end inactivity | 250 ms | contract §5 initial target |
 | base step | 2 volume points per detent | UX tuning |
 
@@ -289,7 +289,7 @@ The backend therefore also registers an `IMMNotificationClient` on the `IMMDevic
 3. register the volume callback on the new endpoint;
 4. read the new endpoint's current volume and publish it as a **`Confirmed`** value.
 
-Step 4 matters: after a device switch the displayed value is the new endpoint's truth, not a carried-over number from the old one. If a rebind occurs while a gesture is open, the gesture's committed target is discarded for that gesture and the confirmed value is applied at gesture end — the device switch is a known change of the thing being controlled, and silently retargeting the remaining detents onto a different endpoint would violate the same principle US3 applies to target loss.
+Step 4 matters: after a device switch the displayed value is the new endpoint's truth, not a carried-over number from the old one. If a rebind occurs while a gesture is open, the gesture is **abandoned** — its remaining detents drive nothing — and step 4 still applies immediately: the new endpoint's `Confirmed` value is published at once, not held until gesture end. The device switch is a known change of the thing being controlled, and silently retargeting the remaining detents onto a different endpoint would violate the same principle US3 applies to target loss; continuing to display the *old* endpoint's number until the user happens to stop turning would be the same invention by a different route. An earlier revision of this paragraph, and the matching bullet in §8, said the value was applied at gesture end, contradicting step 4 above; the implementation (`action/gesture_value.rs::on_endpoint_rebind`) follows step 4.
 
 The device role is `eRender` + `eConsole`, recorded as a documented constant. On current Windows `eMultimedia` normally resolves to the same endpoint; that assumption is a physical-validation item rather than an assertion, and `eCommunications` is deliberately **not** followed.
 
@@ -313,7 +313,7 @@ The behavior that only the rotary path exercises:
 - While a gesture is open, the desktop's locally computed target value **owns** the displayed value and is sent as `ValueConfidence::Preview`. Rapid detents do not require a confirmation round trip each (US3 rapid rotary input).
 - An external Core Audio volume change during an active gesture — one whose event context is *not* Kivori's — does **not** overwrite the in-progress preview (US3 mid-gesture desktop state changes). It is recorded as the latest confirmed truth and applied at gesture end.
 - On `GestureEnded`, the desktop reads back the confirmed value and the display reconciles to it as `ValueConfidence::Confirmed`. **Confirmed state wins** (US3, US4, invariant 1). If the write succeeded but read-back is unavailable, it reconciles as `Unverified` — never `Confirmed`.
-- If the default endpoint changes mid-gesture (§7.1), the gesture's remaining target is discarded rather than retargeted, and the new endpoint's confirmed value is applied at gesture end.
+- If the default endpoint changes mid-gesture (§7.1), the gesture is abandoned rather than retargeted, and the new endpoint's `Confirmed` value is published immediately (§7.1 step 4) — not deferred to gesture end.
 - Values clamp at 0 and 100 immediately. Repeated detents further into a boundary set `at_boundary` once and do not re-trigger feedback; the first reverse detent takes effect immediately without requiring the gesture to end.
 
 With a fixed 1× step there is no multiplier to reset, so reversal is correct by construction.

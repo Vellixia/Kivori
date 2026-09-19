@@ -22,7 +22,7 @@ check on the physical ESP32-C3 + HW-040 with a real Windows host.
 | 1 | One physical detent produces exactly one volume step, both directions | fixed 1× step | | |
 | 2 | Slow rotation loses no detents | US1 observed detents | | |
 | 3 | Fast rotation produces no false reversals | R-82 | | |
-| 4 | Bounce/noise produces no phantom detents; invalid-transition counter stays low | HW-validation #2 | | |
+| 4 | Bounce/noise produces no phantom detents; invalid-transition counter stays low | `QUARTER_STEPS_PER_DETENT` full-step qualification | | |
 
 ## Hardware — Windows Core Audio integration
 
@@ -47,7 +47,7 @@ check on the physical ESP32-C3 + HW-040 with a real Windows host.
 
 | # | Check | Target | Result | Notes |
 |---|---|---|---|---|
-| 14 | **Measured detent → on-panel feedback latency** | **< 50 ms (contract §5)** | | This is a gate, not a note (design spec §10). Slice 002 is not complete while this row is failing or unmeasured. If the measurement misses target, `apps/desktop/src-tauri/src/runtime/device_task.rs`'s fixed `TICK = 50ms` sleep must be replaced with a short-timeout blocking serial read and the number re-measured before this row can close. |
+| 14 | **Measured detent → on-panel feedback latency** | **< 50 ms (contract §5)** | | This is a gate, not a note (design spec §10). Slice 002 is not complete while this row is failing or unmeasured. **Two quantisation steps contribute, not one, and every pixel round-trips the desktop — there is no device-local acknowledgement at all.** (a) `apps/desktop/src-tauri/src/runtime/device_task.rs`'s fixed `TICK = 50ms` sleep, and (b) the firmware's `RuntimeConfig::frame_interval_ms = 33` render cadence. Worst case is roughly 50 + serial + 33 ≈ 85 ms against a < 50 ms target, so the measurement is expected to be informative. Neither constant is being pre-emptively changed: the decision is deliberately measure-first. If the measurement misses target, the remedies are, in order, replacing the desktop `TICK` with a short-timeout blocking serial read, then tightening `frame_interval_ms`, then considering device-local feedback; the number must be re-measured before this row can close. |
 
 ## Hardware — HW-040 wiring itself
 
