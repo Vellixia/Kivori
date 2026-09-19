@@ -6,9 +6,81 @@ Kivori is a physical desktop companion that lets people control their computer t
 
 ## Project status
 
-Feature 001 (Device Connection Foundation) established the current connection, protocol, deterministic rendering, Device Studio, firmware simulation, and ESP32-C3/ST7789 runtime foundation. Its software work is complete; remaining physical/platform acceptance items are recorded in its validation ledger.
+**Feature 001 — Device Connection Foundation.** Established the connection, protocol, deterministic rendering, Device Studio, firmware simulation, and ESP32-C3/ST7789 runtime foundation. Software complete; remaining physical acceptance items live in its validation ledger.
 
-The product contract now extends beyond Feature 001. Product behavior is defined by the PRD and User Story Contract. Technical research records implementation possibilities and uncertainties; accepted durable technical choices belong in ADRs.
+**Slice 002 — Rotary Volume Control Loop.** Implementation complete and green on CI. Turning the HW-040 knob changes Windows master volume, and the device displays the volume Windows actually reports — the first slice that delivers the product thesis rather than only the link beneath it. **Physical validation is outstanding:** all 15 rows of its checklist are blank, including the measured detent→feedback latency gate, so the slice is *not* closed.
+
+The product contract extends beyond both. Product behavior is defined by the PRD and User Story Contract. Technical research records possibilities and uncertainties; accepted durable technical choices belong in ADRs.
+
+## Hardware
+
+One ESP32-C3, one ST7789 240×240 panel, one HW-040 rotary encoder. USB provides power, flashing, and the product data link — no external UART bridge.
+
+### Pin map
+
+| Signal | GPIO | Notes |
+|---|---:|---|
+| SPI SCK | 6 | SPI2, 20 MHz, Mode 3 |
+| SPI MOSI | 7 | |
+| Display D/C | 2 | strapping pin, driven after boot |
+| Display RST | 3 | |
+| Backlight | 8 | active-high; strapping pin, must be high at reset anyway |
+| Encoder CLK (A) | 4 | |
+| Encoder DT (B) | 5 | |
+| Encoder SW | 10 | |
+| USB D− / D+ | 18 / 19 | native USB Serial/JTAG, `0x303A:0x1001` |
+
+Encoder COM to **GND**, VCC to **3V3**. **Not 5V — ESP32-C3 GPIOs are not 5 V tolerant.** Firmware enables internal pull-ups and reads all three encoder lines active-low, so it works whether or not your HW-040 board populates its own pull-ups.
+
+### Two things worth knowing about these pins
+
+**GPIO9 is deliberately avoided for the switch**, even though it is the BOOT button on most devkits. Holding GPIO9 low at reset enters the ROM download mode, and the encoder switch is Kivori's recovery control — a user power-cycling while holding it for recovery would land in the downloader instead of booting Kivori.
+
+**The display pins are measured evidence; the encoder pins are not.** The display profile was physically verified on 2026-08-11 and is recorded in the Feature 001 validation checklist. The encoder pin map is a *specification* wired to on request, pending physical confirmation — row 15 of the Slice 002 checklist. Do not treat the two as equally settled.
+
+Both live in one place, [`firmware/esp32-c3/src/profile.rs`](firmware/esp32-c3/src/profile.rs), so a rewire is a single constant change.
+
+## Getting started
+
+### Prerequisites
+
+- **Rust** stable (both workspaces pin it; the firmware workspace adds the `riscv32imc-unknown-none-elf` target automatically)
+- **[Bun](https://bun.sh)** for the frontend
+- **[just](https://github.com/casey/just)** as the command runner
+- **[espflash](https://github.com/esp-rs/espflash)** only if you are flashing hardware — `cargo install espflash`
+- **jq** for the dependency guard scripts
+- A `WOKWI_CLI_TOKEN` only if you intend to run the Wokwi simulation gate
+
+### Run the desktop app
+
+```bash
+bun install
+just dev                       # Vite dev server for the Device Studio UI
+```
+
+The native core owns the serial link; the webview receives only typed IPC commands. Device discovery is automatic — there is no COM-port picker by design.
+
+### Flash the device
+
+```bash
+just fw-build                  # builds the product firmware (physical-st7789)
+just fw-flash                  # flash + monitor over USB
+```
+
+Both recipes select the `physical-st7789` feature, which is what reaches the real display-and-input runtime. A plain `--features embedded` build compiles, but falls through to a bare fallback with no display and no input — useful to know if you invoke cargo directly.
+
+### Verify without hardware
+
+Most of the system is provable on a host machine:
+
+```bash
+just test                      # host workspace + frontend
+just fw-test                   # firmware core against host-sim adapters
+just golden                    # deterministic rendering, frame-hash goldens
+just sim-test                  # Wokwi scenarios (needs a token)
+```
+
+Host-sim, Wokwi simulation, and physical hardware are **separate classes of evidence** in this project, and simulation never gets promoted to physical proof. See any feature's validation checklist for how results are recorded.
 
 ## Documentation map
 
@@ -21,7 +93,11 @@ The product contract now extends beyond Feature 001. Product behavior is defined
 | Accepted durable architecture decisions | [`docs/adr/`](docs/adr/) |
 | Feature 001 requirements, implementation record, contracts, and evidence | [`docs/features/001-device-connection-foundation/`](docs/features/001-device-connection-foundation/) |
 | Feature 001 closure status | [`docs/features/001-device-connection-foundation/closure-status.md`](docs/features/001-device-connection-foundation/closure-status.md) |
-| Physical/manual validation ledger | [`docs/features/001-device-connection-foundation/validation-checklist.md`](docs/features/001-device-connection-foundation/validation-checklist.md) |
+| Feature 001 validation ledger | [`docs/features/001-device-connection-foundation/validation-checklist.md`](docs/features/001-device-connection-foundation/validation-checklist.md) |
+| Wire protocol contract (framing, messages, capabilities, session identity) | [`docs/features/001-device-connection-foundation/contracts/protocol.md`](docs/features/001-device-connection-foundation/contracts/protocol.md) |
+| Native core ↔ webview IPC contract | [`docs/features/001-device-connection-foundation/contracts/ipc.md`](docs/features/001-device-connection-foundation/contracts/ipc.md) |
+| Slice 002 rotary volume control — records and architecture | [`docs/features/002-rotary-volume-control/`](docs/features/002-rotary-volume-control/) |
+| Slice 002 physical validation ledger (**15 rows, all outstanding**) | [`docs/features/002-rotary-volume-control/validation-checklist.md`](docs/features/002-rotary-volume-control/validation-checklist.md) |
 | Superpowers design records | [`docs/superpowers/specs/`](docs/superpowers/specs/) |
 | Superpowers implementation plans | [`docs/superpowers/plans/`](docs/superpowers/plans/) |
 | Wokwi simulation | [`sim/wokwi/README.md`](sim/wokwi/README.md) |
@@ -92,16 +168,28 @@ Feature records contain durable project knowledge, not workflow scaffolding. The
 The repository uses [`just`](https://github.com/casey/just) as a convenience command runner.
 
 ```bash
-just lint             # Rust + TypeScript formatting/lint/type checks
-just test             # host workspace + frontend tests
-just build            # host workspace + frontend build
-just fw-check          # shared no_std crates for the RISC-V target
-just fw-test           # firmware core host-simulation tests
-just fw-build          # build physical ESP32-C3 firmware
-just fw-flash          # flash and monitor the verified physical profile
-just sim-test          # Wokwi integration scenarios
+just dev               # Vite dev server for the Device Studio UI
+just lint              # Rust + TypeScript formatting/lint/type checks
+just test              # host workspace + frontend tests
+just build             # host workspace + frontend build
+just fw-check          # shared no_std crates compiled for RISC-V (isolation proof)
+just fw-test           # firmware core against host-sim adapters
+just fw-build          # build the product ESP32-C3 firmware (physical-st7789)
+just fw-flash          # flash + monitor the product firmware over USB
+just sim-test          # Wokwi integration scenarios (needs WOKWI_CLI_TOKEN)
 just golden            # deterministic rendering golden-frame tests
 just check-boundaries  # shared-crate dependency firewall
+just assets            # recompile the canonical asset blob
 ```
+
+Three guard scripts run in CI and are worth running locally before pushing — they fail for reasons ordinary tests do not catch:
+
+```bash
+bash scripts/check-release-surface.sh   # dev-only surfaces absent from production builds
+bash scripts/check-crate-boundaries.sh  # no std/OS deps in the shared no_std crates
+bash scripts/check-offline-deps.sh      # no first-party crate pulls a network client
+```
+
+`check-release-surface.sh` compiles the shared crates for the device target on purpose, including a positive control that proves the absence checks are not vacuous. It is the one gate most likely to catch a change that every test suite still passes.
 
 See [`docs/features/001-device-connection-foundation/quickstart.md`](docs/features/001-device-connection-foundation/quickstart.md) and [`sim/wokwi/README.md`](sim/wokwi/README.md) for environment-specific setup and validation detail.
