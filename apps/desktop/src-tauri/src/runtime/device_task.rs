@@ -185,11 +185,13 @@ fn device_loop(
                             &mut activity_planner,
                             &mut manager,
                             ManagerEvent::IoError,
-                            &mut link,
-                            &mut connected_port,
-                            &mut retry_at,
-                            &mut deadlines,
-                            &flash,
+                            LinkRecovery::new(
+                                &mut link,
+                                &mut connected_port,
+                                &mut retry_at,
+                                &mut deadlines,
+                                &flash,
+                            ),
                             |observation| {
                                 record_observations(&app, &activity_log, [observation]);
                             },
@@ -233,11 +235,13 @@ fn device_loop(
                             &mut activity_planner,
                             &mut manager,
                             ManagerEvent::IoError,
-                            &mut link,
-                            &mut connected_port,
-                            &mut retry_at,
-                            &mut deadlines,
-                            &flash,
+                            LinkRecovery::new(
+                                &mut link,
+                                &mut connected_port,
+                                &mut retry_at,
+                                &mut deadlines,
+                                &flash,
+                            ),
                             |observation| {
                                 record_observations(&app, &activity_log, [observation]);
                             },
@@ -324,12 +328,31 @@ fn device_loop(
                     if let Some(name) = candidate {
                         let attempt = activity_planner.attempt();
                         record_with_metadata(&app, &activity_log, attempt.kind, attempt.metadata);
-                        if let Ok(mut opened) = SerialPortLink::open(&name) {
-                            if session.open(&mut opened, &mut manager).is_ok() {
-                                link = Some(opened);
-                                connected_port = Some(name);
-                                deadlines.on_port_opened(started.elapsed());
-                            }
+                        let opened = SerialPortLink::open(&name).ok().and_then(|mut opened| {
+                            session
+                                .open(&mut opened, &mut manager)
+                                .is_ok()
+                                .then_some(opened)
+                        });
+                        if let Some(opened) = opened {
+                            link = Some(opened);
+                            connected_port = Some(name);
+                            deadlines.on_port_opened(started.elapsed());
+                        } else {
+                            recover_discovery_open_failure(
+                                &mut activity_planner,
+                                &mut manager,
+                                LinkRecovery::new(
+                                    &mut link,
+                                    &mut connected_port,
+                                    &mut retry_at,
+                                    &mut deadlines,
+                                    &flash,
+                                ),
+                                |observation| {
+                                    record_observations(&app, &activity_log, [observation]);
+                                },
+                            );
                         }
                     }
                 }
@@ -370,11 +393,13 @@ fn device_loop(
                         &mut activity_planner,
                         &mut manager,
                         event,
-                        &mut link,
-                        &mut connected_port,
-                        &mut retry_at,
-                        &mut deadlines,
-                        &flash,
+                        LinkRecovery::new(
+                            &mut link,
+                            &mut connected_port,
+                            &mut retry_at,
+                            &mut deadlines,
+                            &flash,
+                        ),
                         |observation| {
                             record_observations(&app, &activity_log, [observation]);
                         },
@@ -428,11 +453,13 @@ fn device_loop(
                     &mut activity_planner,
                     &mut manager,
                     ManagerEvent::IoError,
-                    &mut link,
-                    &mut connected_port,
-                    &mut retry_at,
-                    &mut deadlines,
-                    &flash,
+                    LinkRecovery::new(
+                        &mut link,
+                        &mut connected_port,
+                        &mut retry_at,
+                        &mut deadlines,
+                        &flash,
+                    ),
                     |observation| {
                         record_observations(&app, &activity_log, [observation]);
                     },
@@ -535,6 +562,33 @@ where
     resume
 }
 
+/// The device-loop state a link recovery tears down and reschedules.
+pub struct LinkRecovery<'a> {
+    link: &'a mut Option<SerialPortLink>,
+    connected_port: &'a mut Option<String>,
+    retry_at: &'a mut Option<Instant>,
+    deadlines: &'a mut ConnectionDeadlines,
+    flash: &'a FlashWorkflow,
+}
+
+impl<'a> LinkRecovery<'a> {
+    pub fn new(
+        link: &'a mut Option<SerialPortLink>,
+        connected_port: &'a mut Option<String>,
+        retry_at: &'a mut Option<Instant>,
+        deadlines: &'a mut ConnectionDeadlines,
+        flash: &'a FlashWorkflow,
+    ) -> Self {
+        Self {
+            link,
+            connected_port,
+            retry_at,
+            deadlines,
+            flash,
+        }
+    }
+}
+
 /// Applies the real link-recovery state change and yields its closed activity observations.
 ///
 /// Tauri recording remains in the caller, allowing host tests to exercise this exact production
@@ -543,28 +597,46 @@ pub fn recover_link(
     activity_planner: &mut RuntimeActivityPlanner,
     manager: &mut ConnectionManager,
     event: ManagerEvent,
-    link: &mut Option<SerialPortLink>,
-    connected_port: &mut Option<String>,
-    retry_at: &mut Option<Instant>,
-    deadlines: &mut ConnectionDeadlines,
-    flash: &FlashWorkflow,
+    recovery: LinkRecovery<'_>,
     observe: impl FnMut(SessionActivity),
 ) {
     let failure_kind = connection_event_kind(&event);
     manager.apply(event);
-    *link = None;
-    *connected_port = None;
-    deadlines.on_link_lost();
-    if flash.status().phase == crate::firmware::FirmwarePhase::Reconnecting {
-        *retry_at = None;
+    *recovery.link = None;
+    *recovery.connected_port = None;
+    recovery.deadlines.on_link_lost();
+    if recovery.flash.status().phase == crate::firmware::FirmwarePhase::Reconnecting {
+        *recovery.retry_at = None;
     } else {
         let backoff = base_delay_ms(manager.retry_count());
-        *retry_at = Some(Instant::now() + Duration::from_millis(backoff));
+        *recovery.retry_at = Some(Instant::now() + Duration::from_millis(backoff));
     }
     activity_planner
-        .failure(failure_kind, retry_at.is_some())
+        .failure(failure_kind, recovery.retry_at.is_some())
         .into_iter()
         .for_each(observe);
+}
+
+/// Recovers a discovery attempt whose serial open or `Hello` write failed.
+///
+/// A failed serial open never reached `Connecting`; it is still a failed connection attempt, so it
+/// enters the same I/O-failure backoff as a failed `Hello` write instead of retrying every tick.
+pub fn recover_discovery_open_failure(
+    activity_planner: &mut RuntimeActivityPlanner,
+    manager: &mut ConnectionManager,
+    recovery: LinkRecovery<'_>,
+    observe: impl FnMut(SessionActivity),
+) {
+    if manager.state() == ConnectionState::Disconnected {
+        manager.apply(ManagerEvent::PortOpened);
+    }
+    recover_link(
+        activity_planner,
+        manager,
+        ManagerEvent::IoError,
+        recovery,
+        observe,
+    );
 }
 
 /// Observes the exact lifecycle transition used by the device loop.

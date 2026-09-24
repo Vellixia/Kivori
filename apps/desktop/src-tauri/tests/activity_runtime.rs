@@ -14,8 +14,8 @@ use kivori_desktop::device::transport::SerialLink;
 use kivori_desktop::firmware::FlashWorkflow;
 use kivori_desktop::orchestrator::Orchestrator;
 use kivori_desktop::runtime::device_task::{
-    observe_connection_transition, recover_discovery_open_failure, plan_device_request, recover_link,
-    ConnectionDeadlines, LinkRecovery,
+    observe_connection_transition, plan_device_request, recover_discovery_open_failure,
+    recover_link, ConnectionDeadlines, LinkRecovery,
 };
 use kivori_desktop::runtime::state::DeviceCommand;
 use kivori_model::{CompanionState, ConnectionState, ProtocolVersion};
@@ -61,7 +61,10 @@ impl SerialLink for FailingHelloLink {
     }
 
     fn write(&mut self, _bytes: &[u8]) -> Result<usize, Self::Error> {
-        Err(Error::new(ErrorKind::BrokenPipe, "test hello write failure"))
+        Err(Error::new(
+            ErrorKind::BrokenPipe,
+            "test hello write failure",
+        ))
     }
 }
 
@@ -329,7 +332,10 @@ fn serial_open_failure_enters_backoff_and_records_one_specific_recovery() {
 
     assert_eq!(manager.state(), ConnectionState::Error);
     assert_eq!(manager.retry_count(), 1);
-    assert!(retry.is_some(), "a serial-open failure must back off before retrying");
+    assert!(
+        retry.is_some(),
+        "a serial-open failure must back off before retrying"
+    );
     assert_eq!(
         activity,
         [
@@ -364,7 +370,10 @@ fn hello_write_failure_enters_backoff_and_records_one_specific_recovery() {
 
     assert_eq!(manager.state(), ConnectionState::Error);
     assert_eq!(manager.retry_count(), 1);
-    assert!(retry.is_some(), "a hello-write failure must back off before retrying");
+    assert!(
+        retry.is_some(),
+        "a hello-write failure must back off before retrying"
+    );
     assert_eq!(
         activity,
         [
@@ -390,11 +399,13 @@ fn production_recovery_emits_retry_only_when_it_sets_a_retry_deadline() {
         &mut idle_planner,
         &mut idle_manager,
         ManagerEvent::IoError,
-        &mut idle_link,
-        &mut idle_port,
-        &mut idle_retry,
-        &mut idle_deadlines,
-        &idle_flash,
+        LinkRecovery::new(
+            &mut idle_link,
+            &mut idle_port,
+            &mut idle_retry,
+            &mut idle_deadlines,
+            &idle_flash,
+        ),
         |observation| idle_activity.push(observation.kind),
     );
 
@@ -426,11 +437,13 @@ fn production_recovery_emits_retry_only_when_it_sets_a_retry_deadline() {
         &mut reconnect_planner,
         &mut reconnect_manager,
         ManagerEvent::IoError,
-        &mut reconnect_link,
-        &mut reconnect_port,
-        &mut reconnect_retry,
-        &mut reconnect_deadlines,
-        &reconnect_flash,
+        LinkRecovery::new(
+            &mut reconnect_link,
+            &mut reconnect_port,
+            &mut reconnect_retry,
+            &mut reconnect_deadlines,
+            &reconnect_flash,
+        ),
         |observation| reconnect_activity.push(observation.kind),
     );
 
@@ -452,11 +465,7 @@ fn production_transition_adapter_keeps_recovery_pending_until_connected() {
         &mut planner,
         &mut manager,
         ManagerEvent::IoError,
-        &mut link,
-        &mut port,
-        &mut retry,
-        &mut deadlines,
-        &flash,
+        LinkRecovery::new(&mut link, &mut port, &mut retry, &mut deadlines, &flash),
         |_| {},
     );
 
