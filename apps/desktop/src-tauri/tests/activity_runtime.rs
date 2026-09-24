@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 use std::convert::Infallible;
+use std::io::{Error, ErrorKind};
 
 use kivori_desktop::activity::{
     ActivityEventKind, ActivityMetadata, ActivityOutcome, RuntimeActivityPlanner,
@@ -13,7 +14,8 @@ use kivori_desktop::device::transport::SerialLink;
 use kivori_desktop::firmware::FlashWorkflow;
 use kivori_desktop::orchestrator::Orchestrator;
 use kivori_desktop::runtime::device_task::{
-    observe_connection_transition, plan_device_request, recover_link, ConnectionDeadlines,
+    observe_connection_transition, recover_discovery_open_failure, plan_device_request, recover_link,
+    ConnectionDeadlines, LinkRecovery,
 };
 use kivori_desktop::runtime::state::DeviceCommand;
 use kivori_model::{CompanionState, ConnectionState, ProtocolVersion};
@@ -46,6 +48,20 @@ impl SerialLink for FakeLink {
     fn write(&mut self, bytes: &[u8]) -> Result<usize, Self::Error> {
         self.outgoing.extend(bytes.iter().copied());
         Ok(bytes.len())
+    }
+}
+
+struct FailingHelloLink;
+
+impl SerialLink for FailingHelloLink {
+    type Error = Error;
+
+    fn read(&mut self, _bytes: &mut [u8]) -> Result<usize, Self::Error> {
+        Ok(0)
+    }
+
+    fn write(&mut self, _bytes: &[u8]) -> Result<usize, Self::Error> {
+        Err(Error::new(ErrorKind::BrokenPipe, "test hello write failure"))
     }
 }
 
@@ -290,6 +306,71 @@ fn planner_retains_failure_retry_and_recovery_across_intervening_states() {
     assert_eq!(
         planner.recovered().map(|entry| entry.kind),
         Some(ActivityEventKind::ConnectionRecovered)
+    );
+}
+
+#[test]
+fn serial_open_failure_enters_backoff_and_records_one_specific_recovery() {
+    let mut planner = RuntimeActivityPlanner::new();
+    let mut manager = ConnectionManager::new();
+    let mut link = None;
+    let mut port = None;
+    let mut retry = None;
+    let mut deadlines = ConnectionDeadlines::new();
+    let flash = FlashWorkflow::new(true, 512);
+    let mut activity = Vec::new();
+
+    recover_discovery_open_failure(
+        &mut planner,
+        &mut manager,
+        LinkRecovery::new(&mut link, &mut port, &mut retry, &mut deadlines, &flash),
+        |observation| activity.push(observation.kind),
+    );
+
+    assert_eq!(manager.state(), ConnectionState::Error);
+    assert_eq!(manager.retry_count(), 1);
+    assert!(retry.is_some(), "a serial-open failure must back off before retrying");
+    assert_eq!(
+        activity,
+        [
+            ActivityEventKind::ConnectionIoFailure,
+            ActivityEventKind::ConnectionRetryScheduled,
+        ]
+    );
+}
+
+#[test]
+fn hello_write_failure_enters_backoff_and_records_one_specific_recovery() {
+    let mut planner = RuntimeActivityPlanner::new();
+    let mut manager = ConnectionManager::new();
+    let mut session = Session::new(SessionConfig::default());
+    let mut failed_link = FailingHelloLink;
+    assert!(session.open(&mut failed_link, &mut manager).is_err());
+    assert_eq!(manager.state(), ConnectionState::Connecting);
+
+    let mut link = None;
+    let mut port = None;
+    let mut retry = None;
+    let mut deadlines = ConnectionDeadlines::new();
+    let flash = FlashWorkflow::new(true, 512);
+    let mut activity = Vec::new();
+
+    recover_discovery_open_failure(
+        &mut planner,
+        &mut manager,
+        LinkRecovery::new(&mut link, &mut port, &mut retry, &mut deadlines, &flash),
+        |observation| activity.push(observation.kind),
+    );
+
+    assert_eq!(manager.state(), ConnectionState::Error);
+    assert_eq!(manager.retry_count(), 1);
+    assert!(retry.is_some(), "a hello-write failure must back off before retrying");
+    assert_eq!(
+        activity,
+        [
+            ActivityEventKind::ConnectionIoFailure,
+            ActivityEventKind::ConnectionRetryScheduled,
+        ]
     );
 }
 
