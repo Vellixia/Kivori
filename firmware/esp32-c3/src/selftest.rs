@@ -146,7 +146,7 @@ pub fn run<C: Clock>(clock: &C) -> bool {
             );
             check(
                 &mut pass,
-                ack.device_caps == Capabilities::NONE,
+                ack.device_caps == identity().capabilities,
                 "capability-advertised",
             );
         }
@@ -274,6 +274,7 @@ pub fn run<C: Clock>(clock: &C) -> bool {
             });
             check(&mut pass, geometry_ok, "tile-geometry-rgb565");
             println!("{TAG} INFO tile0-hash={:016x}", bands[0].hash);
+            let idle_hashes: Vec<u64, TILE_COUNT> = bands.iter().map(|r| r.hash).collect();
 
             probe.reset();
             let again = renderer
@@ -282,12 +283,21 @@ pub fn run<C: Clock>(clock: &C) -> bool {
             check(&mut pass, again, "render-repeat-ok");
             check(&mut pass, probe.flushes == 0, "change-driven-no-reflush");
 
-            // A different state must flush again (the frame really changed).
+            // A different state flushes exactly the tiles whose content changed; tiles that stay
+            // identical (e.g. background corners) are skipped.
+            let mut reference = TileProbe::new();
+            let _ = TileRenderer::new().render(&blob, CompanionState::Happy, 0, &mut reference);
+            let changed = reference
+                .records()
+                .iter()
+                .zip(idle_hashes.iter())
+                .filter(|(happy, idle)| happy.hash != **idle)
+                .count();
             probe.reset();
             let _ = renderer.render(&blob, CompanionState::Happy, 0, &mut probe);
             check(
                 &mut pass,
-                probe.flushes as usize == TILE_COUNT,
+                changed > 0 && probe.flushes as usize == changed,
                 "change-driven-reflush-on-change",
             );
             println!("{TAG} INFO preview-fps={PREVIEW_FPS}");
