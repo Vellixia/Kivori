@@ -356,20 +356,18 @@ impl Session {
                 }
             }
             Message::Pong(_) => self.heartbeat.on_pong(),
-            Message::StateReport(report) => {
-                if self.reported != Some(report.reported) {
-                    self.reported = Some(report.reported);
-                    self.observe(
-                        if report.reported == orchestrator.desired().to_companion() {
-                            ActivityEventKind::StateSynchronized
-                        } else {
-                            ActivityEventKind::DeviceStateObserved
-                        },
-                        Some(ActivityMetadata::DeviceState {
-                            reported: report.reported,
-                        }),
-                    );
-                }
+            Message::StateReport(report) if self.reported != Some(report.reported) => {
+                self.reported = Some(report.reported);
+                self.observe(
+                    if report.reported == orchestrator.desired().to_companion() {
+                        ActivityEventKind::StateSynchronized
+                    } else {
+                        ActivityEventKind::DeviceStateObserved
+                    },
+                    Some(ActivityMetadata::DeviceState {
+                        reported: report.reported,
+                    }),
+                );
             }
             Message::MascotActionApplied(applied) => {
                 self.last_mascot_action_applied = Some(applied);
