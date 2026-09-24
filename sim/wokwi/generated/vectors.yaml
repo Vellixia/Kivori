@@ -21,7 +21,7 @@ vectors:
   - name: hello_unsupported_capability
     purpose: 'host advertises capability bits the device does not implement — intersection must hold'
     len: 30
-    bytes: [4, 86, 75, 1, 2, 1, 1, 1, 2, 14, 1, 2, 1, 1, 15, 255, 255, 255, 255, 15, 248, 172, 209, 145, 1, 204, 66, 74, 183, 0]
+    bytes: [4, 86, 75, 1, 2, 1, 2, 2, 2, 14, 1, 2, 1, 1, 15, 255, 255, 255, 255, 15, 248, 172, 209, 145, 1, 79, 41, 158, 178, 0]
   - name: ping
     purpose: 'heartbeat — expects a Pong echoing the timestamp'
     len: 19

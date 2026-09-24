@@ -320,15 +320,7 @@ fn report_tx(io: &mut UsbJtagTransport<'_>, message: &Message) {
             );
             line(io, &out);
             let mut caps: String<64> = String::new();
-            let _ = write!(
-                caps,
-                "CAPS advertised={}",
-                if ack.device_caps.is_empty() {
-                    "none"
-                } else {
-                    "some"
-                }
-            );
+            let _ = write!(caps, "CAPS advertised={:#010x}", ack.device_caps.bits());
             line(io, &caps);
         }
         Message::Pong(pong) => {

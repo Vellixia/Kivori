@@ -22,8 +22,8 @@ steps:
   - write-serial: [4, 86, 75, 1, 2, 6, 1, 1, 2, 10, 1, 2, 1, 1, 1, 10, 248, 172, 209, 145, 1, 163, 48, 87, 20, 0]
   - wait-serial: 'KIVORI-EXT TX kind=HelloAck nonce=ok'
   # hello_unsupported_capability: host advertises capability bits the device does not implement — intersection must hold
-  - write-serial: [4, 86, 75, 1, 2, 1, 1, 1, 2, 14, 1, 2, 1, 1, 15, 255, 255, 255, 255, 15, 248, 172, 209, 145, 1, 204, 66, 74, 183, 0]
-  - wait-serial: 'KIVORI-EXT CAPS advertised=none'
+  - write-serial: [4, 86, 75, 1, 2, 1, 2, 2, 2, 14, 1, 2, 1, 1, 15, 255, 255, 255, 255, 15, 248, 172, 209, 145, 1, 79, 41, 158, 178, 0]
+  - wait-serial: 'KIVORI-EXT CAPS advertised=0x00000001'
   # hello_incompatible_major: unsupported major — must be rejected with no valid response (FR-003)
   - write-serial: [4, 86, 75, 2, 1, 1, 1, 1, 2, 10, 1, 2, 1, 1, 1, 10, 248, 172, 209, 145, 1, 37, 132, 64, 173, 0]
   - wait-serial: 'KIVORI-EXT DROP reason=decode'
