@@ -456,7 +456,7 @@ pub fn run(peripherals: Peripherals) -> bool {
                 "unchanged-no-reflush",
             );
 
-            // A changed state transmits only bands whose pixels changed; common background stays cached.
+            // A changed state transmits only tiles whose pixels changed; common background stays cached.
             sink.reset();
             let changed_before = counters.data_bytes();
             let changed = renderer
@@ -466,7 +466,7 @@ pub fn run(peripherals: Peripherals) -> bool {
                 &mut pass,
                 changed
                     && sink.blits > 0
-                    && sink.blits <= 6
+                    && (sink.blits as usize) < TILE_COUNT
                     && counters.data_bytes() - changed_before == sink.blits * TILE_DATA_BYTES,
                 "changed-reflush",
             );
