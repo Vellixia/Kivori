@@ -1,8 +1,9 @@
 # Kivori Product Requirements Document
 
-**Status:** Product baseline  
-**Date:** 2026-09-16  
-**Behavioral contract:** [`user-story-contract.md`](./user-story-contract.md)
+**Status:** Product baseline, revised with release phasing  
+**Date:** 2026-09-16 (revised 2026-09-25)  
+**Behavioral contract:** [`user-story-contract.md`](./user-story-contract.md)  
+**Build order:** [`../roadmap.md`](../roadmap.md)
 
 ## 1. Product Summary
 
@@ -13,7 +14,7 @@ The product is built around a two-way relationship:
 - **User -> Kivori -> Desktop**: the user performs a physical action and Kivori requests a desktop action.
 - **Desktop -> Kivori -> User**: the desktop reports observable state and Kivori represents it through the buddy, overlays, indicators, and feedback.
 
-Kivori is not primarily a virtual pet, notification dashboard, or generic macro pad. The buddy exists to make desktop state understandable, glanceable, and personal.
+Kivori is not a notification dashboard or a generic macro pad. It has a mascot, the **buddy**, and the buddy is central to the product: it is what makes Kivori an object people want on their desk rather than another peripheral. The buddy has personality, but its job is to make desktop state understandable, glanceable, and personal. Kivori is not a virtual pet with its own goals or progression. The buddy's expression always serves the desktop (see §9.5).
 
 > **Product thesis:** Control the desktop physically. Understand the desktop visually.
 
@@ -32,6 +33,15 @@ The product should:
 7. make waiting, processing, recovery, restriction, and failure states visibly intentional rather than appearing frozen or unresponsive.
 
 The buddy represents the desktop. It should not claim a state that Kivori cannot observe or verify.
+
+### 2.1 Success measures
+
+Each release has one outcome that can be tested:
+
+- **v1 (daily use):** the maintainer uses Kivori every workday for 10 consecutive workdays, on both a Windows and a macOS machine. In that time there is no restart, no reflash, and no opening of the configuration window except to change a setting on purpose.
+- **v2 (beta):** a user who is not the maintainer installs, configures, updates, and recovers Kivori using only the shipped documentation.
+
+Useful signals to watch: how often each control is used per day, input → feedback latency, the number of Unverified or Error outcomes, and the number of manual reconnects (zero is the target).
 
 ## 3. User Problem
 
@@ -94,7 +104,7 @@ Factory reset remains separate from ordinary recovery.
 
 ### 5.7 Offline-first core
 
-Core control, state representation, configuration, and device operation should not require cloud connectivity. Cloud profile synchronization is not required for MVP.
+Core control, state representation, configuration, and device operation should not require cloud connectivity. Cloud profile synchronization is not required for v1 or v2.
 
 Update discovery may use network connectivity, but already-installed core functionality should continue to operate without cloud access.
 
@@ -157,6 +167,18 @@ The buddy and indicators may represent states such as:
 - connection/system health;
 - restricted or unavailable capabilities.
 
+### 6.3.1 Supported platforms
+
+v1 supports **Windows and macOS** equally. A desktop capability is complete only when it works on both, or the PRD explicitly documents it as unavailable on one platform. When that happens, the unavailable platform shows the capability as unavailable rather than failing silently (§11).
+
+Known differences between the platforms, which the product must handle:
+
+- macOS needs **Accessibility** permission for keyboard shortcuts and focused-app detection. Before that permission is granted, it is a normal, expected Permission Required case (§11), not an error.
+- The system volume, output device, and microphone mute APIs differ per platform; each platform needs its own backend behind the same action contract.
+- Launch at login and tray / menu-bar presence use each platform's own mechanism.
+
+Linux is outside v1.
+
 ### 6.4 Responsive physical feedback
 
 Physical input should receive immediate local acknowledgement. The display may show local previews for continuous controls, then reconcile them against confirmed state.
@@ -170,7 +192,7 @@ Kivori Desktop is the configuration center for:
 - explicit actions;
 - rotary sensitivity and acceleration;
 - global bindings;
-- visual and buzzer feedback;
+- visual feedback, and buzzer/haptic feedback on hardware that has it (§19);
 - ambient/display behavior;
 - application targeting;
 - device assignment;
@@ -187,9 +209,9 @@ Kivori Desktop should act as the update coordinator: it discovers applicable rel
 
 ### 7.1 Input model
 
-MVP physical input is based on a rotary encoder with press behavior.
+v1 physical input is based on a rotary encoder with press behavior.
 
-MVP uses one active gesture at a time. Simultaneous controls are not interpreted as implicit chords. Future combinations such as `Hold + Rotate` must be introduced as explicit input types.
+v1 uses one active gesture at a time. Simultaneous controls are not interpreted as implicit chords. Future combinations such as `Hold + Rotate` must be introduced as explicit input types.
 
 Normal discrete button mappings are release-qualified and do not implicitly inherit OS key-repeat behavior. A user who maps a discrete action such as `Next Track` receives one action per valid discrete press/release.
 
@@ -211,7 +233,7 @@ Bounded values clamp immediately. Excess movement at a boundary may receive one 
 
 A normal `Rotate` binding represents one bidirectional logical control. A Global `Rotate -> Master Volume` binding therefore owns both clockwise and counter-clockwise detents for that rotary gesture.
 
-MVP must not silently compose unrelated mappings such as Global clockwise volume with Application counter-clockwise custom behavior. If future directional split binding is supported, it must be an explicit configuration mode with visible conflict/precedence rules.
+v1 must not silently compose unrelated mappings such as Global clockwise volume with Application counter-clockwise custom behavior. If future directional split binding is supported, it must be an explicit configuration mode with visible conflict/precedence rules.
 
 ### 7.3 Confirmation model
 
@@ -245,21 +267,21 @@ A gesture belongs to the context in which it began. If focus changes mid-rotatio
 
 Global bindings are explicit reservations of their configured logical input scope.
 
-For MVP, a global bidirectional `Rotate` binding reserves the complete rotary gesture. An application profile may replace that whole logical rotary binding only through an explicit higher-precedence profile override; it does not partially steal one direction from the global binding.
+For v1, a global bidirectional `Rotate` binding reserves the complete rotary gesture. An application profile may replace that whole logical rotary binding only through an explicit higher-precedence profile override; it does not partially steal one direction from the global binding.
 
 ### 8.4 Active OS user
 
 Configuration belongs to the active OS user. One user's mappings must never carry into another user's desktop session.
 
-Kivori Desktop is expected to operate in the user's normal session for MVP rather than requiring the entire product to run as a permanently privileged machine-wide service.
+Kivori Desktop is expected to operate in the user's normal session for v1 and v2 rather than requiring the entire product to run as a permanently privileged machine-wide service.
 
 ### 8.5 Machine scope
 
-MVP profiles are local per machine and per OS user. Machine-local paths, scripts, device identities, and application installations are not cloud-synchronized.
+v1 profiles are local per machine and per OS user. Machine-local paths, scripts, device identities, and application installations are not cloud-synchronized.
 
 ## 9. Visual State Model
 
-Kivori uses four visual layers.
+Kivori uses four visual layers (§9.1–§9.4), in priority order, above a personality layer (§9.5) that animates the buddy between and beneath them.
 
 Every user-relevant state should look intentional. When Kivori can render, transitions such as Waiting, Reconnecting, Processing, Protected, Permission Required, Firmware Updating, recovery, and known failure should not be represented by unexplained visual silence or a frozen-looking frame.
 
@@ -300,11 +322,25 @@ The buddy represents the main current desktop condition, such as:
 - Error;
 - Unknown.
 
+Each primary state has a distinct buddy expression that stays recognizable at a glance, even when a secondary indicator or an overlay is visible at the same time.
+
 ### 9.4 Secondary indicators
 
 Secondary indicators represent simultaneous supporting state, such as microphone mute, master audio mute, media activity, call activity, or application-specific state.
 
 The UI should prioritize a small number of meaningful indicators instead of shrinking indefinitely to display every possible status.
+
+### 9.5 Buddy personality layer
+
+Beneath the state layers, the buddy has **personality**: idle motion, blinking, small reactions to input, and expressive transitions between states. Personality makes Kivori feel alive, and it is how Kivori avoids the "frozen device" look that §5.8 forbids.
+
+Personality follows one rule: **it may animate freely, but it must never look like a desktop state.**
+
+- A reaction to a knob turn, an idle fidget, or a playful self-play animation is allowed at any time.
+- A personality animation must not borrow the look of a meaningful state. For example, a celebratory wiggle must not resemble Success, and a sleepy loop must not resemble Sleeping / Locked while the host is awake.
+- Personality always gives way to the higher layers. A takeover state, a Degraded health signal, a primary-state change, or an input overlay takes priority immediately.
+- Personality settings (such as a calmer or livelier buddy) change only how strongly the buddy moves, never which states it reports.
+- In the Low Motion and Display Sleep idle stages (§12), personality motion is reduced or stopped first.
 
 ## 10. Connection and Session State Model
 
@@ -355,7 +391,7 @@ When Kivori Desktop remains connected but an OS permission is missing or revoked
 - blocked actions are not repeatedly retried;
 - a broad restriction may escalate to a Permission Required takeover state.
 
-Normal custom actions are suspended in protected or locked contexts for MVP.
+Normal custom actions are suspended in protected or locked contexts for v1 and v2.
 
 ## 12. Display Idle and Burn-In Protection
 
@@ -378,11 +414,13 @@ Kivori distinguishes user-initiated feedback from unsolicited background feedbac
 - user-initiated acknowledgement follows Kivori's own feedback settings;
 - background buzzer feedback respects OS Do Not Disturb / Focus Mode by default.
 
+The current hardware has no buzzer (§19). Until a hardware revision adds one, feedback is visual only, and buzzer settings are not shown.
+
 ## 14. Device Recovery and Update System
 
 ### 14.1 Normal MCU recovery
 
-MVP should provide a software-independent-from-desktop recovery gesture:
+v1 should provide a software-independent-from-desktop recovery gesture:
 
 **Hold the primary hardware button for approximately 10 seconds -> force MCU reboot.**
 
@@ -469,44 +507,56 @@ Examples:
 
 ## 15. Multi-Device Behavior
 
-MVP supports **one Active Kivori per desktop session**.
+v1 supports **one Active Kivori per desktop session**.
 
 Additional connected units remain **Passive / Unassigned**. They must not silently mirror desktop state, execute mappings, or become visual-only monitors.
 
-Future multi-device support may introduce explicit roles, including a separate Monitor Mode, but this is outside MVP.
+Future multi-device support may introduce explicit roles, including a separate Monitor Mode, but this is outside v1 and v2.
 
-## 16. MVP Scope
+## 16. Release Scope
 
-MVP should prove the product loop rather than maximize integrations.
+The capabilities in §6–§15 describe the complete product. They ship in two releases so that the core loop is proven in daily use before any investment in distribution. The build order within each release is in the [roadmap](../roadmap.md).
 
-Required product capabilities:
+### 16.1 v1: Daily use (maintainer, Windows + macOS)
 
-- one Kivori connected to one active desktop session;
+v1 proves the product loop on real desks. It includes:
+
+- one Kivori connected to one active desktop session, on Windows and macOS;
 - rotary + button physical input;
-- General profile and application-aware profiles;
-- explicit global and application actions;
-- core controls such as system volume, media, microphone mute, and configured desktop actions;
-- immediate input acknowledgement and honest confirmation semantics;
-- real desktop state synchronization where observable;
-- buddy + takeover + system-health + secondary-indicator presentation model;
-- intentional visual feedback for user-relevant waiting, processing, restriction, transition, failure, and recovery states;
-- predictable focus and gesture ownership;
-- connection/session recovery states;
-- desktop configuration UI;
-- local per-user, per-machine configuration;
-- safe display-idle behavior;
-- normal MCU reboot gesture;
-- application-independent low-level firmware recovery path on production hardware;
-- visible desktop/firmware version and update availability;
-- compatibility-aware, authenticated desktop and firmware update flow;
-- rollback/recovery behavior for firmware installation where platform support permits it.
+- system volume, media, microphone mute, master mute, keyboard shortcut, and app launch actions;
+- immediate input acknowledgement and honest confirmation semantics (§7.3);
+- real desktop state synchronization where observable, including changes made outside Kivori;
+- General profile and application-aware profiles with stable focus and gesture ownership;
+- desktop configuration UI with local per-user, per-machine configuration;
+- buddy + personality + takeover + system-health + secondary-indicator presentation model;
+- intentional visual feedback for waiting, processing, restriction, transition, failure, and recovery states;
+- connection/session recovery across sleep, wake, lock, and reconnect;
+- Permission Required handling, especially the macOS Accessibility flow;
+- safe display-idle and burn-in behavior;
+- the normal MCU reboot gesture;
+- launch at login and tray / menu-bar presence;
+- visible desktop and firmware versions, plus user-initiated firmware flashing of the bundled build.
 
-## 17. MVP Non-Goals
+### 16.2 v2: Beta (other users)
 
-The following are intentionally outside the MVP product contract:
+v2 makes Kivori safe to hand to someone else. It adds:
+
+- an authenticated release manifest, compatibility evaluation, and `Update All` ordering (§14.4);
+- desktop application installers and authenticated updates (§14.5);
+- rollback-safe (A/B) firmware installation with post-boot validation (§14.3);
+- production hardware with an application-independent recovery path, and Desktop detection of recovery mode (§14.2);
+- hardware revision identity reported to Desktop;
+- OS user switching and Passive handling of additional devices (§8.4, §15);
+- a factory reset procedure separate from recovery.
+
+Until v2, firmware updates are manual and user-initiated. The v1 flow must still never present a failed flash as success (gate 10 applies in its v1 form: flashing is explicit, the bundled build is known to be compatible, and failure is reported).
+
+## 17. Non-Goals
+
+The following are intentionally outside the product contract for v1 and v2:
 
 - cloud profile synchronization;
-- independent virtual-pet progression;
+- independent virtual-pet progression (needs, levels, or goals that don't come from the desktop);
 - generic news/weather/crypto dashboard features;
 - workflow orchestration as a flagship concept;
 - automatic inference of arbitrary web apps or scripts from window titles;
@@ -539,3 +589,26 @@ A product increment is aligned with this PRD only if it preserves these invarian
 10. **Compatibility-safe updates:** desktop and firmware updates are authenticated, compatibility-checked, ordered safely, and leave a defined recovery path if installation fails.
 
 Detailed normative behavior and acceptance criteria live in [`user-story-contract.md`](./user-story-contract.md).
+
+## 19. Hardware
+
+### 19.1 Current hardware (v1)
+
+- ESP32-C3 with native USB (power, flashing, and data link over one cable);
+- ST7789 240×240 display;
+- HW-040 rotary encoder with a push button, which is the only physical input surface;
+- no buzzer, no haptics, no ambient light sensor.
+
+One knob and one button is a narrow input surface. v1 compensates with explicit profiles (§6.2) rather than hidden gestures or chords (§7.1).
+
+### 19.2 Hardware direction
+
+Future hardware revisions are expected to add, driven by what v1 daily use shows is missing:
+
+- an accessible recovery / boot control on the production PCB (required for v2, §14.2);
+- buzzer or haptic feedback (§13);
+- possibly additional inputs, introduced as explicit input types rather than implicit chords;
+- an enclosure suited to long-term desk use.
+
+Every hardware revision reports its identity to Desktop, so that compatibility (§14.4) and available capabilities (such as whether a buzzer exists) are known and never assumed.
+

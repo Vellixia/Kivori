@@ -89,6 +89,7 @@ Host-sim, Wokwi simulation, and physical hardware are **separate classes of evid
 | Need | Source |
 |---|---|
 | Product goals, scope, and acceptance gates | [`docs/product/prd.md`](docs/product/prd.md) |
+| Build order, phases and checklists | [`docs/roadmap.md`](docs/roadmap.md) |
 | Exact user-visible behavior | [`docs/product/user-story-contract.md`](docs/product/user-story-contract.md) |
 | Engineering invariants and decision discipline | [`docs/engineering-principles.md`](docs/engineering-principles.md) |
 | Cross-platform technical research | [`docs/research/technical-research.md`](docs/research/technical-research.md) |
