@@ -19,6 +19,8 @@ it is built in.
    macOS, or the PRD explicitly marks it as unavailable on one of them.
 5. **Keep scope small.** Anything not listed goes to [Later](#later) until a phase needs it.
 
+Open physical rows for Phases 1–3 are walked in one sitting via [`validation-session.md`](./validation-session.md).
+
 Every phase checklist has the same five parts: **Build**, **Automated**, **Physical**,
 **PRD gates**, **Docs**.
 
