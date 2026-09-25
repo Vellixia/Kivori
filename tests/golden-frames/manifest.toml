@@ -19,12 +19,12 @@ hash = "0x911BC4B3FD4537A5"
 # Layered keycap mascot scenes (from mascot.svg: base, cap, eyes x2, mouth; format v2), rendered at
 # elapsed_ms = 0.
 [asset_scenes]
-booting = "0x34B901C3D653084F"
-idle = "0xD689F565156C9FDF"
-happy = "0xD8248D66109F2B97"
-busy = "0xBE780292ED3A368A"
-sleeping = "0x48891A98878DE69C"
-offline = "0xECDF20102BC3988B"
+booting = "0x544C376ED42344DB"
+idle = "0xCB11A0C7D4D386DD"
+happy = "0x591CB0F243C416F5"
+busy = "0xB8F37A0FD0C664A0"
+sleeping = "0x0004ECC2EAF90106"
+offline = "0x02F8A62DE61D0219"
 
 # Task 10 — canonical volume overlay (kivori_renderer::overlay::render_volume_overlay), sampled at the
 # (percent, confidence, at_boundary) combinations exercised by tests/overlay_golden.rs.

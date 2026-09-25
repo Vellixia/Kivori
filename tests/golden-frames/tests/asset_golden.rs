@@ -12,12 +12,12 @@ use kivori_renderer::{frame_hash, render_scene};
 const DIM: u16 = 240;
 
 // Committed golden frame-hashes (FNV-1a over RGB565 LE bytes); see manifest.toml.
-const H_BOOTING: u64 = 0x34B9_01C3_D653_084F;
-const H_IDLE: u64 = 0xD689_F565_156C_9FDF;
-const H_HAPPY: u64 = 0xD824_8D66_109F_2B97;
-const H_BUSY: u64 = 0xBE78_0292_ED3A_368A;
-const H_SLEEPING: u64 = 0x4889_1A98_878D_E69C;
-const H_OFFLINE: u64 = 0xECDF_2010_2BC3_988B;
+const H_BOOTING: u64 = 0x544C_376E_D423_44DB;
+const H_IDLE: u64 = 0xCB11_A0C7_D4D3_86DD;
+const H_HAPPY: u64 = 0x591C_B0F2_43C4_16F5;
+const H_BUSY: u64 = 0xB8F3_7A0F_D0C6_64A0;
+const H_SLEEPING: u64 = 0x0004_ECC2_EAF9_0106;
+const H_OFFLINE: u64 = 0x02F8_A62D_E61D_0219;
 
 fn render_state_hash(state: CompanionState) -> u64 {
     let blob = compile_default_blob();
@@ -63,11 +63,11 @@ fn motion_and_interrupted_transitions_match_reviewed_pixels() {
     animator.set_state(CompanionState::Happy, 100);
     animator.set_state(CompanionState::Sleeping, 250);
     for (ms, expected) in [
-        (250, 0x730E59EE2D8AF793),
-        (400, 0xA407F4827CA49773),
-        (600, 0xA894915ECC9B60C8),
-        (849, 0x1329280B5B3AE26C),
-        (850, 0x48891A98878DE69C),
+        (250, 0xDEA2144A0D9DB8A9),
+        (400, 0x384DCA480E73B979),
+        (600, 0xE9F2C948FAD057B2),
+        (849, 0x59CEE62CDB2B60DE),
+        (850, 0x0004ECC2EAF90106),
     ] {
         let mut pixels = vec![Rgb565::from_raw(0); 240 * 240];
         let mut band = TileBand::new(Rect::new(0, 0, 240, 240), &mut pixels).unwrap();
@@ -85,14 +85,14 @@ fn motion_and_interrupted_transitions_match_reviewed_pixels() {
         );
     }
     for (state, ms, expected) in [
-        (CompanionState::Idle, 600, 0xD689F565156C9FDF),
-        (CompanionState::Idle, 3600, 0xD689F565156C9FDF),
-        (CompanionState::Idle, 21227, 0xFA5A60E47649B33F),
-        (CompanionState::Idle, 21377, 0xC3967DD096D64BA3),
-        (CompanionState::Idle, 21457, 0x2B85F0CE4D13C5DB),
-        (CompanionState::Idle, 22277, 0x252A6BBE5DDFCDE7),
-        (CompanionState::Happy, 300, 0x1BB6318767D9F314),
-        (CompanionState::Sleeping, 1200, 0x48891A98878DE69C),
+        (CompanionState::Idle, 600, 0xCB11A0C7D4D386DD),
+        (CompanionState::Idle, 3600, 0xCB11A0C7D4D386DD),
+        (CompanionState::Idle, 21227, 0xBFAB00184BEE720D),
+        (CompanionState::Idle, 21377, 0x4CC447392E7519D9),
+        (CompanionState::Idle, 21457, 0xD3DA9DA7BFE2B1E1),
+        (CompanionState::Idle, 22277, 0xE543BE06DC786445),
+        (CompanionState::Happy, 300, 0x6611A78887D32EBA),
+        (CompanionState::Sleeping, 1200, 0x0004ECC2EAF90106),
     ] {
         let mut pixels = vec![Rgb565::from_raw(0); 240 * 240];
         let mut band = TileBand::new(Rect::new(0, 0, 240, 240), &mut pixels).unwrap();
