@@ -99,7 +99,9 @@ pub fn vectors() -> Vec<Vector> {
             bytes: frame(
                 &hello(HELLO_NONCE, Capabilities::from_bits(0xFFFF_FFFF)),
                 current(),
-                0,
+                // seq 0 would repeat `hello_compatible_minor` and be dropped as a duplicate; 2 is a
+                // gap, so it is served, and the following seq-1 `ping` is a gap rather than a repeat.
+                2,
             ),
         },
         Vector {
@@ -257,7 +259,13 @@ pub fn protocol_serial() -> String {
 
     // Unsupported capability bits: the device still answers, advertising only what it implements.
     write_serial(&mut s, "hello_unsupported_capability");
-    wait(&mut s, "KIVORI-EXT CAPS advertised=none");
+    wait(
+        &mut s,
+        &format!(
+            "KIVORI-EXT CAPS advertised={:#010x}",
+            Capabilities::MASCOT_INTERACTION.bits()
+        ),
+    );
 
     // Unsupported major: dropped, and NO response frame is produced.
     write_serial(&mut s, "hello_incompatible_major");
@@ -386,7 +394,7 @@ pub const BOOT_ONLY_MARKERS: &[&str] = &[
     // Production-runtime markers the firmware emits exactly once, before any injection:
     "KIVORI-RUN BOOT",
     "lifecycle-booting-to-offline",
-    "first-frame-six-tiles",
+    "first-frame-36-tiles",
     "unchanged-frame-no-reflush",
     "health-report",
 ];
@@ -421,7 +429,7 @@ pub fn production_runtime() -> String {
     // second tick can observe a quiet frame — pinned by `emission_order_is_stable` in
     // firmware/esp32-c3/tests/production_runtime.rs.
     wait(&mut s, "KIVORI-RUN PASS lifecycle-booting-to-offline");
-    wait(&mut s, "KIVORI-RUN PASS first-frame-six-tiles");
+    wait(&mut s, "KIVORI-RUN PASS first-frame-36-tiles");
     wait(&mut s, "KIVORI-RUN PASS health-report");
     wait(&mut s, "KIVORI-RUN PASS unchanged-frame-no-reflush");
     // Handshake.

@@ -13,7 +13,7 @@ pub mod frame_select;
 pub mod hash;
 pub mod render;
 
-pub use compositor::{render_scene, RenderError};
+pub use compositor::{render_pose, render_scene, RenderError};
 pub use frame_select::select_frame;
 pub use hash::frame_hash;
 pub use render::{render_tile, Scene};

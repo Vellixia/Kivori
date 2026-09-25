@@ -16,11 +16,11 @@ hash = "0x55251F6C652105A5"
 elapsed_ms = 800 # loops to frame 0
 hash = "0x911BC4B3FD4537A5"
 
-# Phase 5 compiled asset scenes (from the placeholder SVGs), rendered at elapsed_ms = 0.
+# Layered mascot scenes (from mascot.svg, format v2), rendered at elapsed_ms = 0.
 [asset_scenes]
-booting = "0x03AB7B32DFCEB0A0"
-idle = "0xB0B85FF83757E18B"
-happy = "0xBCB63754DB36CF8D"
-busy = "0xAD1D8EF21E9734EE"
-sleeping = "0x4E39964B2BECCFD9"
-offline = "0x440D8B4D03CE5700"
+booting = "0xC2C4E9FFE65352DE"
+idle = "0xC9393FBBBE8050BC"
+happy = "0x934B4C317C1604B6"
+busy = "0x7B250F89E9EB9001"
+sleeping = "0x3EA79ECC486418A4"
+offline = "0x520E0C2BC013788A"

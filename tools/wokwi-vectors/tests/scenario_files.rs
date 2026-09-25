@@ -172,7 +172,7 @@ fn the_spi_probe_scenario_matches_the_firmware_markers() {
         "rgb-green",
         "rgb-blue",
         "checkerboard",
-        "tile-count-6",
+        "tile-count-36",
         "tile-bytes",
         "unchanged-no-reflush",
         "changed-reflush",
@@ -240,7 +240,7 @@ fn the_production_runtime_scenario_matches_the_firmware_markers() {
         stages,
         vec![
             "lifecycle-booting-to-offline",
-            "first-frame-six-tiles",
+            "first-frame-36-tiles",
             "health-report",
             "unchanged-frame-no-reflush",
             "hello-ack",

@@ -10,6 +10,29 @@ use kivori_framebuffer::TileBand;
 use kivori_model::{CompanionState, Rect, Rgb565};
 use kivori_renderer::render_scene;
 
+pub mod animation;
+
+/// Renders an explicit animation history, including interrupted transitions, into opaque RGBA.
+pub fn render_animation_rgba(
+    blob: &AssetBlob,
+    timeline: &animation::AnimationTimeline,
+    elapsed_ms: u32,
+) -> Result<Vec<u8>, String> {
+    let (state, pose) = timeline.resolve(elapsed_ms)?;
+    let scene = blob.scene(state).ok_or("missing mascot scene")?;
+    let mut rgb = vec![Rgb565::from_raw(0); DIM as usize * DIM as usize];
+    let mut band = TileBand::new(Rect::new(0, 0, DIM, DIM), &mut rgb).expect("full-frame band");
+    kivori_renderer::render_pose(blob, scene, &pose, &mut band)
+        .map_err(|e| format!("mascot render: {e:?}"))?;
+    Ok(rgb
+        .into_iter()
+        .flat_map(|px| {
+            let (r, g, b) = px.to_rgb888();
+            [r, g, b, 255]
+        })
+        .collect())
+}
+
 /// Preview dimension (square).
 pub const DIM: u16 = 240;
 
@@ -44,8 +67,22 @@ pub fn render_preview_rgba(blob: &AssetBlob, state: CompanionState, elapsed_ms: 
 pub fn bundled_blob() -> &'static AssetBlob<'static> {
     use std::sync::OnceLock;
     static BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/kivori.assets"));
-    static PARSED: OnceLock<AssetBlob<'static>> = OnceLock::new();
-    PARSED.get_or_init(|| AssetBlob::parse(BYTES).expect("bundled asset blob is valid"))
+    static PARSED: OnceLock<Box<AssetBlob<'static>>> = OnceLock::new();
+    PARSED
+        .get_or_init(|| {
+            // Deserializing the bounded, inline manifest creates large debug-build temporaries.
+            // Windows UI threads have only a 1 MiB stack. Decode once on a dedicated stack and
+            // return a box so moving the result back does not put the manifest on the UI stack.
+            // The worker's stack is released after initialization; sprite pixels still borrow BYTES.
+            std::thread::Builder::new()
+                .name("kivori-asset-loader".into())
+                .stack_size(2 * 1024 * 1024)
+                .spawn(|| Box::new(AssetBlob::parse(BYTES).expect("bundled asset blob is valid")))
+                .expect("asset loader thread starts")
+                .join()
+                .expect("asset loader thread completes")
+        })
+        .as_ref()
 }
 
 /// Renders `state` at `elapsed_ms` from the bundled blob into a 240x240 RGBA8888 buffer. Dev-only.

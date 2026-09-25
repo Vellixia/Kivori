@@ -5,7 +5,8 @@ use kivori_assets::manifest::{BitmapEntry, LayerDef, Manifest, PoolRef, SceneDef
 use kivori_assets::{AssetBlob, FORMAT_VERSION, MAGIC};
 use kivori_framebuffer::TileBand;
 use kivori_model::{
-    CompanionState, DeviceProfile, FrameRate, Keyframe, LayerKind, Point, Rect, Rgb565, Size,
+    CompanionState, DeviceProfile, FrameRate, Keyframe, LayerKind, LayerRole, Point, Rect, Rgb565,
+    Size,
 };
 use kivori_renderer::render_scene;
 
@@ -55,6 +56,7 @@ fn sample_blob() -> std::vec::Vec<u8> {
             size: Size::new(2, 2),
             frames: 1,
             data: sprite,
+            alpha: None,
         })
         .unwrap();
     let mut strings = Vec::new();
@@ -67,6 +69,7 @@ fn sample_blob() -> std::vec::Vec<u8> {
                 size: Size::new(20, 20),
                 color: Rgb565::from_rgb888(255, 0, 0),
             },
+            role: LayerRole::Static,
             origin: Point::new(10, 10),
             keyframes: one_kf(),
         })
@@ -77,6 +80,7 @@ fn sample_blob() -> std::vec::Vec<u8> {
                 asset: 0,
                 frame_size: Size::new(2, 2),
             },
+            role: LayerRole::Static,
             origin: Point::new(50, 50),
             keyframes: one_kf(),
         })
@@ -88,6 +92,7 @@ fn sample_blob() -> std::vec::Vec<u8> {
                 string: 0,
                 color: Rgb565::WHITE,
             },
+            role: LayerRole::Static,
             origin: Point::new(5, 5),
             keyframes: one_kf(),
         })
@@ -155,6 +160,7 @@ fn hidden_layer_is_not_drawn() {
                 size: Size::new(20, 20),
                 color: Rgb565::from_rgb888(255, 0, 0),
             },
+            role: LayerRole::Static,
             origin: Point::new(10, 10),
             keyframes: kfs,
         })
@@ -184,4 +190,59 @@ fn hidden_layer_is_not_drawn() {
     render_scene(&asset, scene, 0, &mut band).unwrap();
     // The hidden rect did not paint over the background.
     assert_eq!(buf[10 * DIM as usize + 10], Rgb565::from_rgb888(0, 0, 255));
+}
+
+#[test]
+fn composites_packed_alpha4_over_the_background() {
+    let mut bitmaps = Vec::new();
+    bitmaps
+        .push(BitmapEntry {
+            size: Size::new(1, 1),
+            frames: 1,
+            data: PoolRef { offset: 0, len: 2 },
+            alpha: Some(PoolRef { offset: 2, len: 1 }),
+        })
+        .unwrap();
+    let mut layers: Vec<LayerDef, { kivori_assets::MAX_LAYERS }> = Vec::new();
+    layers
+        .push(LayerDef {
+            kind: LayerKind::Sprite {
+                asset: 0,
+                frame_size: Size::new(1, 1),
+            },
+            role: LayerRole::Static,
+            origin: Point::new(10, 10),
+            keyframes: one_kf(),
+        })
+        .unwrap();
+    let mut scenes = Vec::new();
+    scenes
+        .push(SceneDef {
+            id: CompanionState::Idle,
+            background: Rgb565::from_rgb888(0, 0, 255),
+            fps: FrameRate::fps(1),
+            frame_count: 1,
+            layers,
+        })
+        .unwrap();
+    let blob = build_blob(
+        &Manifest {
+            profile: DeviceProfile::KIVORI_240,
+            bitmaps,
+            strings: Vec::new(),
+            scenes,
+        },
+        &[0x00, 0xF8, 0x08], // red RGB565, then 8/15 alpha in the low nibble
+    );
+    let asset = AssetBlob::parse(&blob).unwrap();
+    let scene = asset.scene(CompanionState::Idle).unwrap();
+    let mut buf = vec![Rgb565::BLACK; DIM as usize * DIM as usize];
+    let mut band = TileBand::new(Rect::new(0, 0, DIM, DIM), &mut buf).unwrap();
+
+    render_scene(&asset, scene, 0, &mut band).unwrap();
+
+    assert_eq!(
+        buf[10 * DIM as usize + 10],
+        Rgb565::from_rgb888(136, 0, 119)
+    );
 }

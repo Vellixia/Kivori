@@ -11,13 +11,17 @@
 use heapless::Vec as HVec;
 use kivori_asset_compiler::compile_default_blob;
 use kivori_assets::AssetBlob;
+use kivori_firmware::ports::Clock;
 use kivori_firmware::proto::DeviceIdentity;
+use kivori_firmware::render::{TILE_COLS, TILE_COUNT};
 use kivori_firmware::runtime::{Runtime, RuntimeConfig, Tick};
 use kivori_firmware::sim::{CaptureDisplay, SimPipe, VirtualClock};
-use kivori_model::{Capabilities, CompanionState, ProtocolVersion, SendableState};
+use kivori_model::{
+    Capabilities, CompanionState, MascotAction, MascotPersonality, ProtocolVersion, SendableState,
+};
 use kivori_protocol::{
     decode_message, encode_message, Bye, ByeReason, ErrorCategory, FirmwareVersion, Hello, Message,
-    Ping, SetState, MAX_FRAME, MAX_WIRE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
+    Ping, PlayMascotAction, Ready, SetState, MAX_FRAME, MAX_WIRE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
 };
 
 fn identity() -> DeviceIdentity {
@@ -28,7 +32,7 @@ fn identity() -> DeviceIdentity {
             minor: 0,
             patch: 0,
         },
-        capabilities: Capabilities::NONE,
+        capabilities: Capabilities::MASCOT_INTERACTION,
     }
 }
 
@@ -61,7 +65,7 @@ fn host_drain(pipe: &mut SimPipe) -> Vec<Message> {
 
 /// The whole test rig: runtime plus its three ports and the compiled asset blob.
 struct Harness {
-    runtime: Runtime,
+    runtime: Runtime<'static>,
     clock: VirtualClock,
     pipe: SimPipe,
     display: Box<CaptureDisplay>,
@@ -102,20 +106,40 @@ fn boot_transitions_to_offline_and_paints_the_first_frame() {
     // The device owns `booting` at power-on and falls back to `offline` with no host (FR-014/015).
     assert_eq!(tick.state, Some(CompanionState::Offline));
     assert_eq!(h.runtime.state(), CompanionState::Offline);
-    // A full 240x240 frame is six 240x40 bands.
-    assert_eq!(tick.tiles_flushed, 6, "first frame flushes every tile");
-    assert_eq!(h.display.blits, 6);
+    assert_eq!(
+        tick.tiles_flushed as usize, TILE_COUNT,
+        "first frame flushes every tile"
+    );
+    assert_eq!(h.display.blits as usize, TILE_COUNT);
 }
 
 #[test]
-fn an_unchanged_frame_flushes_nothing() {
+fn a_tick_before_the_next_frame_flushes_nothing() {
     let mut h = Harness::new();
     h.step();
-    let quiet = h.tick_next_frame();
+    let quiet = h.step();
     assert_eq!(
         quiet.tiles_flushed, 0,
         "no tile changed, so nothing may reach the panel (FR-013)"
     );
+}
+
+#[test]
+fn a_late_frame_keeps_the_original_cadence_without_queuing_stale_frames() {
+    let mut h = Harness::new();
+    h.step();
+
+    h.clock.advance(50);
+    assert!(h.step().frame_rendered, "the overdue frame renders once");
+
+    h.clock.advance(15);
+    assert!(
+        !h.step().frame_rendered,
+        "the next anchored deadline is 66 ms"
+    );
+
+    h.clock.advance(1);
+    assert!(h.step().frame_rendered, "the 66 ms deadline is preserved");
 }
 
 #[test]
@@ -185,9 +209,9 @@ fn set_state_is_applied_reported_and_repainted() {
         let tick = h.tick_next_frame();
 
         assert_eq!(h.runtime.state(), expected);
-        assert_eq!(
-            tick.tiles_flushed, 6,
-            "a state change repaints the whole frame"
+        assert!(
+            tick.tiles_flushed as usize <= TILE_COUNT - TILE_COLS,
+            "the unchanged top background row is not retransmitted"
         );
         let report = host_drain(&mut h.pipe)
             .into_iter()
@@ -197,7 +221,151 @@ fn set_state_is_applied_reported_and_repainted() {
             })
             .expect("StateReport");
         assert_eq!(report.reported, expected);
+        let initial = h.display.frame().to_vec();
+        h.clock.advance(600);
+        h.step();
+        assert_ne!(
+            h.display.frame(),
+            initial.as_slice(),
+            "the transition advances after the immediate state report"
+        );
     }
+}
+
+#[test]
+fn social_action_changes_pixels_without_changing_semantic_state_and_is_acknowledged() {
+    let mut h = Harness::new();
+    h.step();
+    host_write(
+        &mut h.pipe,
+        &Message::Hello(Hello {
+            desktop_version: FirmwareVersion {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            desktop_caps: Capabilities::MASCOT_INTERACTION,
+            nonce: 1,
+        }),
+        0,
+    );
+    h.tick_next_frame();
+    let _ = host_drain(&mut h.pipe);
+    host_write(
+        &mut h.pipe,
+        &Message::Ready(Ready {
+            negotiated_minor: PROTOCOL_MINOR,
+            negotiated_caps: Capabilities::MASCOT_INTERACTION,
+        }),
+        1,
+    );
+    h.tick_next_frame();
+    host_write(
+        &mut h.pipe,
+        &Message::SetState(SetState {
+            desired: SendableState::Idle,
+            at_ms: None,
+        }),
+        2,
+    );
+    h.tick_next_frame();
+    let _ = host_drain(&mut h.pipe);
+    h.clock.advance(600);
+    h.step();
+    let before = h.display.frame().to_vec();
+
+    host_write(
+        &mut h.pipe,
+        &Message::PlayMascotAction(PlayMascotAction {
+            action: MascotAction::Tickle,
+            personality: MascotPersonality::Playful,
+            seed: 23,
+        }),
+        3,
+    );
+    let first_tick = h.tick_next_frame();
+    let applied_at_ms = h.clock.now_ms();
+    assert_eq!(
+        first_tick.tiles_flushed, 0,
+        "action begins from the current rendered pose"
+    );
+    let tick = h.tick_next_frame();
+
+    assert_eq!(h.runtime.state(), CompanionState::Idle);
+    assert!(tick.tiles_flushed > 0);
+    assert_ne!(h.display.frame(), before.as_slice());
+    let applied = host_drain(&mut h.pipe)
+        .into_iter()
+        .find_map(|message| match message {
+            Message::MascotActionApplied(applied) => Some(applied),
+            _ => None,
+        })
+        .expect("MascotActionApplied");
+    assert_eq!(applied.action, MascotAction::Tickle);
+    assert_eq!(applied.personality, MascotPersonality::Playful);
+    assert_eq!(applied.seed, 23);
+    assert_eq!(applied.applied_at_ms, applied_at_ms);
+}
+
+#[test]
+fn social_actions_require_ready_and_the_negotiated_capability() {
+    let action = Message::PlayMascotAction(PlayMascotAction {
+        action: MascotAction::Pet,
+        personality: MascotPersonality::Cozy,
+        seed: 9,
+    });
+    let mut h = Harness::new();
+    h.step();
+    host_write(
+        &mut h.pipe,
+        &Message::Ready(Ready {
+            negotiated_minor: PROTOCOL_MINOR,
+            negotiated_caps: Capabilities::MASCOT_INTERACTION,
+        }),
+        0,
+    );
+    h.tick_next_frame();
+    host_write(&mut h.pipe, &action, 1);
+    h.tick_next_frame();
+    assert!(!host_drain(&mut h.pipe)
+        .iter()
+        .any(|m| matches!(m, Message::MascotActionApplied(_))));
+
+    host_write(&mut h.pipe, &action, 0);
+    h.tick_next_frame();
+    assert!(!host_drain(&mut h.pipe)
+        .iter()
+        .any(|m| matches!(m, Message::MascotActionApplied(_))));
+
+    host_write(
+        &mut h.pipe,
+        &Message::Hello(Hello {
+            desktop_version: FirmwareVersion {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            desktop_caps: Capabilities::NONE,
+            nonce: 2,
+        }),
+        2,
+    );
+    h.tick_next_frame();
+    let _ = host_drain(&mut h.pipe);
+    host_write(
+        &mut h.pipe,
+        &Message::Ready(Ready {
+            negotiated_minor: PROTOCOL_MINOR,
+            negotiated_caps: Capabilities::MASCOT_INTERACTION,
+        }),
+        3,
+    );
+    h.tick_next_frame();
+    host_write(&mut h.pipe, &action, 4);
+    h.tick_next_frame();
+    assert!(!host_drain(&mut h.pipe)
+        .iter()
+        .any(|m| matches!(m, Message::MascotActionApplied(_))));
 }
 
 #[test]
@@ -383,14 +551,17 @@ fn emission_order_is_stable() {
         Some(CompanionState::Offline),
         "tick 1: booting -> offline"
     );
-    assert_eq!(first.tiles_flushed, 6, "tick 1: the first full frame");
+    assert_eq!(
+        first.tiles_flushed as usize, TILE_COUNT,
+        "tick 1: the first full frame"
+    );
     assert!(
         first.health_sent,
         "tick 1: health goes out on the first tick, BEFORE any quiet frame can be observed"
     );
 
-    let second = h.tick_next_frame();
-    assert_eq!(second.tiles_flushed, 0, "tick 2: the first quiet frame");
+    let second = h.step();
+    assert_eq!(second.tiles_flushed, 0, "tick 2: no new frame is due yet");
     assert!(
         !second.health_sent,
         "tick 2: health must not repeat inside its interval"

@@ -25,6 +25,7 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::State;
 
 use crate::ipc::dto;
+use crate::render::animation::AnimationTimeline;
 use crate::runtime::state::AppState;
 
 /// Slowest permitted stream rate, in frames per second.
@@ -51,9 +52,26 @@ pub fn step_ms(step: u64, fps: u16) -> u32 {
 pub struct StreamControl {
     cancel: AtomicBool,
     in_flight: AtomicUsize,
+    pending: Mutex<Option<(AnimationTimeline, u32, usize)>>,
+    revision: AtomicUsize,
 }
 
 impl StreamControl {
+    /// Coalesces externally-clocked preview requests into a single pending frame.
+    pub fn update(&self, animation: AnimationTimeline, elapsed_ms: u32) {
+        let mut pending = self.pending.lock().expect("preview request lock");
+        let revision = self.revision.fetch_add(1, Ordering::SeqCst).wrapping_add(1);
+        *pending = Some((animation, elapsed_ms, revision));
+    }
+
+    /// Takes the newest pending request, dropping obsolete timestamps before rendering.
+    pub fn take_request(&self) -> Option<(AnimationTimeline, u32, usize)> {
+        self.pending.lock().expect("preview request lock").take()
+    }
+    /// Whether a request has been superseded while its frame was rendering.
+    pub fn is_current(&self, revision: usize) -> bool {
+        self.revision.load(Ordering::SeqCst) == revision
+    }
     /// Whether the stream has been cancelled (producer must stop).
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
@@ -177,12 +195,21 @@ pub fn open_preview_stream(
     state: String,
     fps: u16,
     channel: Channel<InvokeResponseBody>,
+    animation: Option<AnimationTimeline>,
+    elapsed_ms: Option<u32>,
 ) -> Result<u32, String> {
     let companion = dto::companion_from_token(&state)
         .ok_or_else(|| format!("unknown companion state: {state}"))?;
     let fps = fps.clamp(MIN_FPS, MAX_FPS);
+    if let Some(animation) = &animation {
+        animation.validate()?;
+    }
+    let external_clock = animation.is_some();
     let id = channel.id();
     let control = app.previews.register(id);
+    if let Some(animation) = animation {
+        control.update(animation, elapsed_ms.unwrap_or(0));
+    }
     let streams = Arc::clone(&app.previews);
     let frame_interval = Duration::from_millis(1000 / u64::from(fps));
 
@@ -196,7 +223,31 @@ pub fn open_preview_stream(
                     std::thread::sleep(frame_interval);
                     continue;
                 }
-                let rgba = crate::render::render_preview_bundled(companion, step_ms(step, fps));
+                let rgba = if external_clock {
+                    let Some((animation, elapsed_ms, revision)) = control.take_request() else {
+                        control.release();
+                        std::thread::sleep(frame_interval);
+                        continue;
+                    };
+                    let rendered = match crate::render::render_animation_rgba(
+                        crate::render::bundled_blob(),
+                        &animation,
+                        elapsed_ms,
+                    ) {
+                        Ok(rgba) => rgba,
+                        Err(_) => break,
+                    };
+                    if !control.is_current(revision) {
+                        control.release();
+                        continue;
+                    }
+                    rendered
+                } else {
+                    crate::render::render_preview_bundled(
+                        companion,
+                        elapsed_ms.unwrap_or(0).saturating_add(step_ms(step, fps)),
+                    )
+                };
                 if channel.send(InvokeResponseBody::Raw(rgba)).is_err() {
                     break; // webview gone — stop and clean up
                 }
@@ -205,8 +256,28 @@ pub fn open_preview_stream(
             }
             streams.remove(id);
         })
-        .map_err(|e| format!("could not start preview stream: {e}"))?;
+        .map_err(|e| {
+            app.previews.cancel(id);
+            format!("could not start preview stream: {e}")
+        })?;
     Ok(id)
+}
+
+/// Updates an existing externally-clocked stream without replacing its producer or channel.
+#[tauri::command]
+pub fn update_preview_stream(
+    app: State<'_, AppState>,
+    handle: u32,
+    animation: AnimationTimeline,
+    elapsed_ms: u32,
+) -> Result<(), String> {
+    animation.validate()?;
+    let control = app
+        .previews
+        .control(handle)
+        .ok_or("preview stream is closed")?;
+    control.update(animation, elapsed_ms);
+    Ok(())
 }
 
 /// Closes a preview stream by handle. Idempotent: closing an unknown handle returns `false`.

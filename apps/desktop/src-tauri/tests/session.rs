@@ -10,10 +10,12 @@ use kivori_desktop::device::session::{Session, SessionConfig};
 use kivori_desktop::device::transport::SerialLink;
 use kivori_desktop::device::ManagerEvent;
 use kivori_desktop::orchestrator::Orchestrator;
-use kivori_model::{Capabilities, ConnectionState, ProtocolVersion, SendableState};
+use kivori_model::{
+    Capabilities, ConnectionState, MascotAction, MascotPersonality, ProtocolVersion, SendableState,
+};
 use kivori_protocol::{
-    decode_message, encode_message, FirmwareVersion, HelloAck, Message, Pong, PROTOCOL_MAJOR,
-    PROTOCOL_MINOR,
+    decode_message, encode_message, FirmwareVersion, HelloAck, MascotActionApplied, Message, Pong,
+    PROTOCOL_MAJOR, PROTOCOL_MINOR,
 };
 
 #[derive(Default)]
@@ -83,7 +85,7 @@ fn wire_version() -> ProtocolVersion {
 
 fn device_ack(nonce: u32) -> Message {
     Message::HelloAck(HelloAck {
-        device_caps: Capabilities::NONE,
+        device_caps: Capabilities::MASCOT_INTERACTION,
         device_id: [0x5A; 16],
         firmware_version: FirmwareVersion {
             major: 1,
@@ -162,6 +164,54 @@ fn set_desired_transmits_only_when_connected() {
         Some(SendableState::Busy)
     );
     assert_eq!(orch.desired(), SendableState::Busy);
+}
+
+#[test]
+fn negotiated_social_action_is_sent_and_applied_ack_is_retained() {
+    let (mut link, mut session, manager, mut orch) = connect(SendableState::Idle);
+    let _ = desktop_drain(&mut link);
+
+    assert!(session.supports_mascot_interaction());
+    assert!(session
+        .play_mascot_action(
+            &mut link,
+            &manager,
+            MascotAction::Pet,
+            MascotPersonality::Cozy,
+            99,
+        )
+        .expect("send action"));
+    assert!(desktop_drain(&mut link).iter().any(|message| matches!(
+        message,
+        Message::PlayMascotAction(action)
+            if action.action == MascotAction::Pet
+                && action.personality == MascotPersonality::Cozy
+                && action.seed == 99
+    )));
+
+    device_push(
+        &mut link,
+        &Message::MascotActionApplied(MascotActionApplied {
+            action: MascotAction::Pet,
+            personality: MascotPersonality::Cozy,
+            seed: 99,
+            applied_at_ms: 7_500,
+        }),
+        wire_version(),
+        1,
+    );
+    session
+        .pump(&mut link, &mut ConnectionManager::new(), &mut orch)
+        .expect("pump applied ack");
+    assert_eq!(
+        session.last_mascot_action_applied(),
+        Some(MascotActionApplied {
+            action: MascotAction::Pet,
+            personality: MascotPersonality::Cozy,
+            seed: 99,
+            applied_at_ms: 7_500,
+        })
+    );
 }
 
 #[test]
@@ -278,6 +328,7 @@ fn reconnect_resyncs_the_within_process_desired_state() {
     assert_eq!(manager.state(), ConnectionState::Disconnected);
 
     session.open(&mut link, &mut manager).expect("reopen");
+    assert_eq!(session.connection_generation(), 2);
     let nonce = hello_nonce(&desktop_drain(&mut link));
     device_push(&mut link, &device_ack(nonce), wire_version(), 0);
     session

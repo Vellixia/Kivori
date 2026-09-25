@@ -2235,6 +2235,7 @@ dependencies = [
  "kivori-protocol",
  "kivori-renderer",
  "serde",
+ "serde_json",
  "serialport",
  "tauri",
  "tauri-build",

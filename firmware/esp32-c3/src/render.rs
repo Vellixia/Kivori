@@ -2,25 +2,32 @@
 //!
 //! Renders the current companion scene one tile at a time through the shared [`render_scene`], hashes
 //! each tile, and flushes only tiles whose content changed since the last frame — the bandwidth
-//! discipline the SPI panel needs. The tile scratch buffer lives in the renderer (not on the stack)
-//! so the device stack stays small.
+//! discipline the SPI panel needs. Physical mode supplies a static frame buffer: all tiles are
+//! composed and hashed first, then changed tiles are transferred without composition gaps.
+//! The small scratch buffer is used by the unbuffered simulation path.
 
 use crate::ports::DisplaySink;
 use kivori_assets::AssetBlob;
 use kivori_framebuffer::{hash_rgb565, TileBand};
-use kivori_model::{CompanionState, ElapsedMs, Rect, Rgb565};
+use kivori_model::{CompanionState, ElapsedMs, MascotPose, Rect, Rgb565};
 use kivori_renderer::render_scene;
 
-/// Tile width (full panel width).
-pub const TILE_W: u16 = 240;
-/// Tile height (one SPI band).
+/// Tile width.
+pub const TILE_W: u16 = 40;
+/// Tile height.
 pub const TILE_H: u16 = 40;
+/// Panel width in pixels.
+pub const PANEL_W: u16 = 240;
 /// Panel height in pixels.
 pub const PANEL_H: u16 = 240;
 /// Pixels per tile.
 pub const TILE_PIXELS: usize = TILE_W as usize * TILE_H as usize;
-/// Number of tile bands covering the panel.
-pub const TILE_COUNT: usize = (PANEL_H / TILE_H) as usize;
+/// Number of tile columns covering the panel.
+pub const TILE_COLS: usize = (PANEL_W / TILE_W) as usize;
+/// Number of tiles covering the panel.
+pub const TILE_COUNT: usize = TILE_COLS * (PANEL_H / TILE_H) as usize;
+/// Pixels in the optional single-frame staging buffer.
+pub const FRAME_PIXELS: usize = PANEL_W as usize * PANEL_H as usize;
 
 /// Why a render pass failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,18 +43,31 @@ pub enum RenderError<E> {
 }
 
 /// A change-driven tile renderer holding the per-tile scratch buffer and last-flushed signatures.
-pub struct TileRenderer {
+pub struct TileRenderer<'a> {
     buf: [Rgb565; TILE_PIXELS],
     signatures: [Option<u64>; TILE_COUNT],
+    frame_buffer: Option<&'a mut [Rgb565; FRAME_PIXELS]>,
 }
 
-impl TileRenderer {
+const _: () = assert!(core::mem::size_of::<TileRenderer>() <= 4_096);
+
+impl<'a> TileRenderer<'a> {
     /// Creates a renderer with an empty (all-black) scratch buffer and no cached signatures.
     #[must_use]
     pub const fn new() -> Self {
         Self {
             buf: [Rgb565::from_raw(0); TILE_PIXELS],
             signatures: [None; TILE_COUNT],
+            frame_buffer: None,
+        }
+    }
+
+    /// Uses caller-owned storage to finish composition before the first display write.
+    /// On hardware this storage must be static, rather than a large stack temporary.
+    pub fn with_frame_buffer(frame_buffer: &'a mut [Rgb565; FRAME_PIXELS]) -> Self {
+        Self {
+            frame_buffer: Some(frame_buffer),
+            ..Self::new()
         }
     }
 
@@ -68,15 +88,67 @@ impl TileRenderer {
         elapsed_ms: ElapsedMs,
         sink: &mut S,
     ) -> Result<(), RenderError<S::Error>> {
+        self.render_inner(blob, state, elapsed_ms, None, sink)
+    }
+
+    /// Renders a resolved shared pose, preserving transitions across state changes.
+    pub fn render_animation<S: DisplaySink>(
+        &mut self,
+        blob: &AssetBlob,
+        state: CompanionState,
+        pose: &MascotPose,
+        sink: &mut S,
+    ) -> Result<(), RenderError<S::Error>> {
+        self.render_inner(blob, state, 0, Some(pose), sink)
+    }
+
+    fn render_inner<S: DisplaySink>(
+        &mut self,
+        blob: &AssetBlob,
+        state: CompanionState,
+        elapsed_ms: ElapsedMs,
+        pose: Option<&MascotPose>,
+        sink: &mut S,
+    ) -> Result<(), RenderError<S::Error>> {
         let scene = blob.scene(state).ok_or(RenderError::MissingScene)?;
+        let buffered = self.frame_buffer.is_some();
+        let mut prepared_signatures = [0; TILE_COUNT];
         for tile in 0..TILE_COUNT {
-            let rect = Rect::new(0, tile as u16 * TILE_H, TILE_W, TILE_H);
-            let mut band = TileBand::new(rect, &mut self.buf).ok_or(RenderError::Band)?;
-            render_scene(blob, scene, elapsed_ms, &mut band)
-                .map_err(|_| RenderError::Compositor)?;
+            let x = (tile % TILE_COLS) as u16 * TILE_W;
+            let y = (tile / TILE_COLS) as u16 * TILE_H;
+            let rect = Rect::new(x, y, TILE_W, TILE_H);
+            let pixels = match self.frame_buffer.as_deref_mut() {
+                Some(frame) => &mut frame[tile * TILE_PIXELS..(tile + 1) * TILE_PIXELS],
+                None => &mut self.buf[..],
+            };
+            let mut band = TileBand::new(rect, pixels).ok_or(RenderError::Band)?;
+            match pose {
+                Some(pose) => kivori_renderer::render_pose(blob, scene, pose, &mut band),
+                None => render_scene(blob, scene, elapsed_ms, &mut band),
+            }
+            .map_err(|_| RenderError::Compositor)?;
             let signature = hash_rgb565(band.pixels());
-            if self.signatures[tile] != Some(signature) {
+            prepared_signatures[tile] = signature;
+            if !buffered && self.signatures[tile] != Some(signature) {
                 sink.blit_tile(rect, band.pixels())
+                    .map_err(RenderError::Sink)?;
+                self.signatures[tile] = Some(signature);
+            }
+        }
+        // No composition or hashing between display writes in the buffered path. The old
+        // panel image stays visible while every tile of the next pose is being prepared.
+        if let Some(frame) = self.frame_buffer.as_deref() {
+            for (tile, signature) in prepared_signatures.into_iter().enumerate() {
+                if self.signatures[tile] == Some(signature) {
+                    continue;
+                }
+                let rect = Rect::new(
+                    (tile % TILE_COLS) as u16 * TILE_W,
+                    (tile / TILE_COLS) as u16 * TILE_H,
+                    TILE_W,
+                    TILE_H,
+                );
+                sink.blit_tile(rect, &frame[tile * TILE_PIXELS..(tile + 1) * TILE_PIXELS])
                     .map_err(RenderError::Sink)?;
                 self.signatures[tile] = Some(signature);
             }
@@ -85,7 +157,7 @@ impl TileRenderer {
     }
 }
 
-impl Default for TileRenderer {
+impl Default for TileRenderer<'_> {
     fn default() -> Self {
         Self::new()
     }

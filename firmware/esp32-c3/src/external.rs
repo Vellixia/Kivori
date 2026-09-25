@@ -45,7 +45,7 @@ fn identity() -> DeviceIdentity {
             minor: 0,
             patch: 0,
         },
-        capabilities: Capabilities::NONE,
+        capabilities: Capabilities::MASCOT_INTERACTION,
     }
 }
 
@@ -83,6 +83,8 @@ fn kind_name(message: &Message) -> &'static str {
         Message::Health(_) => "Health",
         Message::Diagnostic(_) => "Diagnostic",
         Message::Error(_) => "Error",
+        Message::PlayMascotAction(_) => "PlayMascotAction",
+        Message::MascotActionApplied(_) => "MascotActionApplied",
     }
 }
 
@@ -318,15 +320,7 @@ fn report_tx(io: &mut UsbJtagTransport<'_>, message: &Message) {
             );
             line(io, &out);
             let mut caps: String<64> = String::new();
-            let _ = write!(
-                caps,
-                "CAPS advertised={}",
-                if ack.device_caps.is_empty() {
-                    "none"
-                } else {
-                    "some"
-                }
-            );
+            let _ = write!(caps, "CAPS advertised={:#010x}", ack.device_caps.bits());
             line(io, &caps);
         }
         Message::Pong(pong) => {

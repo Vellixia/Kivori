@@ -11,4 +11,5 @@ fn main() {
             .expect("write compiled asset blob");
     }
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=../../assets/mascot.svg");
 }

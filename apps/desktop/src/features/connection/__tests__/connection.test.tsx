@@ -12,6 +12,15 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('../../../lib/ipc', () => ({
+  getFirmwareStatus: async () => ({
+    available: true,
+    phase: 'idle',
+    message: 'Ready.',
+    imageSize: 1024,
+  }),
+  flashFirmware: vi.fn(),
+  configureCompanion: vi.fn(() => Promise.resolve()),
+  playMascotAction: vi.fn(() => Promise.resolve()),
   getConnectionStatus: (): Promise<ConnectionStatusDto | null> => Promise.resolve(h.state.current),
   onConnectionStatus: (cb: (s: ConnectionStatusDto) => void): Promise<() => void> => {
     h.subscribed.count += 1;
@@ -31,6 +40,9 @@ function status(overrides: Partial<ConnectionStatusDto> = {}): ConnectionStatusD
     device: null,
     incompatibleReason: null,
     retryCount: 0,
+    connectionGeneration: 0,
+    mascotInteraction: false,
+    mascotAction: null,
     ...overrides,
   };
 }

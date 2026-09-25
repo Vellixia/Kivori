@@ -10,8 +10,9 @@ use crate::state::{DeviceEvent, DeviceState};
 use heapless::Vec;
 use kivori_model::{Capabilities, ProtocolVersion};
 use kivori_protocol::{
-    decode_message, encode_message, DeviceId, FirmwareVersion, HelloAck, Message, SeqClass,
-    SequenceTracker, StateReport, MAX_FRAME, MAX_WIRE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
+    decode_message, encode_message, DeviceId, FirmwareVersion, HelloAck, MascotActionApplied,
+    Message, PlayMascotAction, SeqClass, SequenceTracker, StateReport, MAX_FRAME, MAX_WIRE,
+    PROTOCOL_MAJOR, PROTOCOL_MINOR,
 };
 
 /// Inbound accumulation capacity: room for a partial packet plus one full wire packet.
@@ -54,6 +55,9 @@ pub struct Dispatcher {
     hello_acks: u32,
     pongs: u32,
     state_reports: u32,
+    pending_action: Option<PlayMascotAction>,
+    negotiated_caps: Capabilities,
+    hello_caps: Option<Capabilities>,
 }
 
 impl Dispatcher {
@@ -71,6 +75,9 @@ impl Dispatcher {
             hello_acks: 0,
             pongs: 0,
             state_reports: 0,
+            pending_action: None,
+            negotiated_caps: Capabilities::NONE,
+            hello_caps: None,
         }
     }
 
@@ -101,6 +108,11 @@ impl Dispatcher {
     /// Takes the pending safe diagnostic, if any. The caller decides whether to transmit it.
     pub fn take_diagnostic(&mut self) -> Option<DeviceDiagnostic> {
         self.pending.take()
+    }
+
+    /// Takes the latest accepted social action for the renderer. Actions never queue.
+    pub fn take_mascot_action(&mut self) -> Option<PlayMascotAction> {
+        self.pending_action.take()
     }
 
     /// Records an allowlisted diagnostic for the caller to pick up (e.g. a display fault the run loop saw).
@@ -204,6 +216,9 @@ impl Dispatcher {
         }
         match message {
             Message::Hello(hello) => {
+                self.negotiated_caps = Capabilities::NONE;
+                self.hello_caps = Some(hello.desktop_caps);
+                self.pending_action = None;
                 let ack = HelloAck {
                     device_caps: self.identity.capabilities,
                     device_id: self.identity.device_id,
@@ -212,6 +227,14 @@ impl Dispatcher {
                 };
                 self.send(transport, &Message::HelloAck(ack))?;
                 self.hello_acks = self.hello_acks.saturating_add(1);
+            }
+            Message::Ready(ready) => {
+                if let Some(hello_caps) = self.hello_caps {
+                    self.negotiated_caps = ready
+                        .negotiated_caps
+                        .intersection(self.identity.capabilities)
+                        .intersection(hello_caps);
+                }
             }
             Message::SetState(set) => {
                 if let Some(now) = device.apply(DeviceEvent::SetState(set.desired)) {
@@ -227,11 +250,30 @@ impl Dispatcher {
                 self.send(transport, &Message::Pong(build_pong(ping.t_ms, now_ms)))?;
                 self.pongs = self.pongs.saturating_add(1);
             }
+            Message::PlayMascotAction(action)
+                if self
+                    .negotiated_caps
+                    .contains(Capabilities::MASCOT_INTERACTION) =>
+            {
+                self.pending_action = Some(action);
+                self.send(
+                    transport,
+                    &Message::MascotActionApplied(MascotActionApplied {
+                        action: action.action,
+                        personality: action.personality,
+                        seed: action.seed,
+                        applied_at_ms: now_ms,
+                    }),
+                )?;
+            }
             Message::Bye(_) => {
                 // Session closed: drop the link and reset sequence tracking for the next session.
                 let _ = device.apply(DeviceEvent::LinkDown);
                 self.tracker = SequenceTracker::new();
                 self.pending = Some(DeviceDiagnostic::LinkLost);
+                self.pending_action = None;
+                self.negotiated_caps = Capabilities::NONE;
+                self.hello_caps = None;
             }
             // `Ready` and the device→desktop message kinds are not acted on by the device.
             _ => {}

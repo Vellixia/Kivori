@@ -4,6 +4,19 @@
 
 ## Context
 
+**2026-09-08 amendment — mascot animation (format v2):** The approved mascot work supersedes
+decision 4's rejection of interpolation. The shared `MascotAnimator` uses Q8 integer transforms
+and cubic smoothstep, retaining the current resolved pose when interrupted. SVG remains a build
+input; no runtime vector parser, floating-point animation, heap allocation, or extra device
+framebuffer is introduced. Generic static layers retain the original step-held keyframes.
+
+Format v2 adds an optional alpha-pool reference to each bitmap (two 4-bit coverage samples per
+byte, even pixel in the low nibble), plus `Static`, `Body`, `Eyes`, and `Mouth` layer roles.
+All mascot scenes share matching facial layer geometry and order. The compositor mixes bounded
+state weights before alpha composition, clips to each tile, and blinks around each eye's centre.
+Readers reject v1 blobs; desktop and firmware rebuild their embedded blobs together. USB wire
+messages and protocol versions are unchanged. See [mascot verification](../evidence/mascot-animation.md).
+
 Principle II ("one canonical visual model") requires that Device Studio and the firmware render from
 the **same** scene definitions, assets, timing, colors, and renderer. Principle XI requires that SVG/PNG
 are authoring inputs only and that the asset compiler emits the canonical runtime representation.

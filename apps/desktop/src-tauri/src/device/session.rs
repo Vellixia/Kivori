@@ -7,16 +7,20 @@
 //! fully host-testable against an in-memory link (and, in the E2E harness, against the real firmware
 //! dispatcher). Malformed inbound frames are dropped without panicking (SC-008).
 
-use crate::device::connection::{build_hello, summarize};
+use crate::activity::{ActivityEventKind, ActivityMetadata, SessionActivity};
+use crate::device::connection::{build_hello, hash_device_id_short, summarize};
 use crate::device::fsm::{ConnectionManager, ManagerEvent};
 use crate::device::heartbeat::HeartbeatMonitor;
 use crate::device::transport::SerialLink;
 use crate::orchestrator::Orchestrator;
-use kivori_model::{Capabilities, CompanionState, ProtocolVersion, SendableState};
+use kivori_model::{
+    Capabilities, CompanionState, MascotAction, MascotPersonality, ProtocolVersion, SendableState,
+};
 use kivori_protocol::{
     decode_frame, decode_message, encode_message, evaluate_hello_ack, Bye, ByeReason,
-    FirmwareVersion, HandshakeOutcome, Hello, Message, Ping, ProtoError, SeqClass, SequenceTracker,
-    SetState, MAX_FRAME, MAX_WIRE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
+    FirmwareVersion, HandshakeOutcome, Hello, MascotActionApplied, Message, Ping, PlayMascotAction,
+    ProtoError, SeqClass, SequenceTracker, SetState, MAX_FRAME, MAX_WIRE, PROTOCOL_MAJOR,
+    PROTOCOL_MINOR,
 };
 
 /// Static session parameters (the desktop's advertised identity + compatibility).
@@ -41,7 +45,7 @@ impl Default for SessionConfig {
                 patch: 0,
             },
             protocol_version: ProtocolVersion::new(PROTOCOL_MAJOR, PROTOCOL_MINOR),
-            capabilities: Capabilities::NONE,
+            capabilities: Capabilities::MASCOT_INTERACTION,
             supported_majors: vec![PROTOCOL_MAJOR],
         }
     }
@@ -65,6 +69,10 @@ pub struct Session {
     next_nonce: u32,
     heartbeat: HeartbeatMonitor,
     reported: Option<CompanionState>,
+    negotiated_caps: Capabilities,
+    last_mascot_action_applied: Option<MascotActionApplied>,
+    connection_generation: u32,
+    activity: Vec<SessionActivity>,
 }
 
 impl Session {
@@ -80,6 +88,10 @@ impl Session {
             next_nonce: 1,
             heartbeat: HeartbeatMonitor::default(),
             reported: None,
+            negotiated_caps: Capabilities::NONE,
+            last_mascot_action_applied: None,
+            connection_generation: 0,
+            activity: Vec::new(),
         }
     }
 
@@ -93,21 +105,54 @@ impl Session {
         manager: &mut ConnectionManager,
     ) -> Result<(), SessionError<L::Error>> {
         manager.apply(ManagerEvent::PortOpened);
+        self.connection_generation = self.connection_generation.wrapping_add(1).max(1);
         self.rx.clear();
         self.inbound = SequenceTracker::new();
         self.heartbeat = HeartbeatMonitor::default();
         self.reported = None;
+        self.negotiated_caps = Capabilities::NONE;
+        self.last_mascot_action_applied = None;
+        self.activity.clear();
         let nonce = self.next_nonce;
         self.next_nonce = self.next_nonce.wrapping_add(1);
         let hello = build_hello(self.config.app_version, self.config.capabilities, nonce);
         self.sent_hello = Some(hello);
-        self.send(link, &Message::Hello(hello))
+        self.send(link, &Message::Hello(hello))?;
+        self.observe(ActivityEventKind::ConnectionOpened, None);
+        self.observe(ActivityEventKind::HandshakeStarted, None);
+        Ok(())
     }
 
     /// The device's most recently reported companion state (`None` until the first `StateReport`).
     #[must_use]
     pub fn reported(&self) -> Option<CompanionState> {
         self.reported
+    }
+
+    /// Whether both peers negotiated transient mascot interactions for this connection.
+    #[must_use]
+    pub fn supports_mascot_interaction(&self) -> bool {
+        self.negotiated_caps
+            .contains(Capabilities::MASCOT_INTERACTION)
+    }
+
+    /// Most recent device acknowledgment for a social action in this connection.
+    #[must_use]
+    pub const fn last_mascot_action_applied(&self) -> Option<MascotActionApplied> {
+        self.last_mascot_action_applied
+    }
+
+    /// Monotonic identity for the current within-process port session.
+    #[must_use]
+    pub const fn connection_generation(&self) -> u32 {
+        self.connection_generation
+    }
+
+    /// Drains observations created while parsing safe session events.
+    ///
+    /// Recording and Tauri emission remain owned by the device task.
+    pub fn drain_activity(&mut self) -> Vec<SessionActivity> {
+        std::mem::take(&mut self.activity)
     }
 
     /// Reads and handles all currently-available inbound frames, driving `manager`/`orchestrator` and
@@ -150,6 +195,31 @@ impl Session {
         Ok(())
     }
 
+    /// Sends one transient social reaction when the connection negotiated support.
+    ///
+    /// Returns `Ok(false)` without writing when disconnected or paired with older firmware.
+    pub fn play_mascot_action<L: SerialLink>(
+        &mut self,
+        link: &mut L,
+        manager: &ConnectionManager,
+        action: MascotAction,
+        personality: MascotPersonality,
+        seed: u32,
+    ) -> Result<bool, SessionError<L::Error>> {
+        if !manager.state().can_drive_device() || !self.supports_mascot_interaction() {
+            return Ok(false);
+        }
+        self.send(
+            link,
+            &Message::PlayMascotAction(PlayMascotAction {
+                action,
+                personality,
+                seed,
+            }),
+        )?;
+        Ok(true)
+    }
+
     /// Sends a heartbeat `Ping` and records it as pending (see [`Session::heartbeat_timed_out`]).
     ///
     /// # Errors
@@ -179,8 +249,13 @@ impl Session {
         let mut scratch: heapless::Vec<u8, MAX_FRAME> = heapless::Vec::new();
         match decode_message(packet, &mut scratch, &self.config.supported_majors) {
             Ok((header, message)) => {
-                if matches!(self.inbound.classify(header.seq), SeqClass::Duplicate) {
-                    return Ok(());
+                match self.inbound.classify(header.seq) {
+                    SeqClass::Duplicate => return Ok(()),
+                    SeqClass::Gap(skipped) => self.observe(
+                        ActivityEventKind::ProtocolSequenceGap,
+                        Some(ActivityMetadata::ProtocolSequenceGap { skipped }),
+                    ),
+                    SeqClass::First | SeqClass::Ok => {}
                 }
                 self.handle_message(header.version, message, link, manager, orchestrator)?;
             }
@@ -193,6 +268,7 @@ impl Session {
                     if manager.apply(ManagerEvent::HandshakeIncompatible {
                         device_major: header.version.major,
                     }) {
+                        self.observe(ActivityEventKind::IncompatibleFirmware, None);
                         self.send(
                             link,
                             &Message::Bye(Bye {
@@ -202,7 +278,20 @@ impl Session {
                     }
                 }
             }
-            Err(_) => {} // malformed — drop, never panic (SC-008)
+            Err(error) => {
+                let mut header_scratch: heapless::Vec<u8, MAX_FRAME> = heapless::Vec::new();
+                let safe_header = decode_frame(packet, &mut header_scratch)
+                    .ok()
+                    .map(|(header, _)| header);
+                self.observe(
+                    ActivityEventKind::ProtocolMalformedFrame,
+                    Some(ActivityMetadata::ProtocolMalformed {
+                        category: malformed_category(error),
+                        payload_len: safe_header.map(|header| header.payload_len),
+                        sequence: safe_header.map(|header| header.seq),
+                    }),
+                );
+            }
         }
         Ok(())
     }
@@ -229,6 +318,20 @@ impl Session {
                 ) {
                     HandshakeOutcome::Compatible(ready) => {
                         manager.apply(ManagerEvent::HandshakeOk(summarize(&ack, device_version)));
+                        self.negotiated_caps = ready.negotiated_caps;
+                        self.observe(ActivityEventKind::HandshakeSucceeded, None);
+                        self.observe(
+                            ActivityEventKind::DeviceNegotiated,
+                            Some(ActivityMetadata::Negotiated {
+                                firmware_major: ack.firmware_version.major,
+                                firmware_minor: ack.firmware_version.minor,
+                                firmware_patch: ack.firmware_version.patch,
+                                protocol_major: device_version.major,
+                                protocol_minor: device_version.minor,
+                                device_id_hash_short: hash_device_id_short(&ack.device_id),
+                                capabilities: ready.negotiated_caps.bits(),
+                            }),
+                        );
                         self.send(link, &Message::Ready(ready))?;
                         // Resynchronize the device to our desired state on (re)connect (FR-009).
                         let desired = orchestrator.resync_state();
@@ -236,6 +339,7 @@ impl Session {
                     }
                     HandshakeOutcome::Incompatible { device_major } => {
                         if manager.apply(ManagerEvent::HandshakeIncompatible { device_major }) {
+                            self.observe(ActivityEventKind::IncompatibleFirmware, None);
                             self.send(
                                 link,
                                 &Message::Bye(Bye {
@@ -247,11 +351,57 @@ impl Session {
                     HandshakeOutcome::BadNonce => {
                         // Identity not confirmed — treat as a failed handshake.
                         manager.apply(ManagerEvent::HandshakeTimeout);
+                        self.observe(ActivityEventKind::HandshakeTimedOut, None);
                     }
                 }
             }
             Message::Pong(_) => self.heartbeat.on_pong(),
-            Message::StateReport(report) => self.reported = Some(report.reported),
+            Message::StateReport(report) if self.reported != Some(report.reported) => {
+                self.reported = Some(report.reported);
+                self.observe(
+                    if report.reported == orchestrator.desired().to_companion() {
+                        ActivityEventKind::StateSynchronized
+                    } else {
+                        ActivityEventKind::DeviceStateObserved
+                    },
+                    Some(ActivityMetadata::DeviceState {
+                        reported: report.reported,
+                    }),
+                );
+            }
+            Message::MascotActionApplied(applied) => {
+                self.last_mascot_action_applied = Some(applied);
+                self.observe(
+                    ActivityEventKind::SocialActionApplied,
+                    Some(ActivityMetadata::Action {
+                        state: None,
+                        personality: Some(applied.personality),
+                        self_play: None,
+                        action: Some(applied.action),
+                        seed: Some(applied.seed),
+                        applied_at_ms: Some(applied.applied_at_ms),
+                        autonomous: None,
+                    }),
+                );
+            }
+            Message::Diagnostic(diagnostic) => self.observe(
+                device_diagnostic_kind(diagnostic.code),
+                Some(ActivityMetadata::DeviceDiagnostic {
+                    category: diagnostic.category,
+                    code: diagnostic.code,
+                }),
+            ),
+            Message::Error(error) => self.observe(
+                match error.category {
+                    kivori_protocol::ErrorCategory::Busy => ActivityEventKind::DeviceBusy,
+                    kivori_protocol::ErrorCategory::Timeout => ActivityEventKind::DeviceTimedOut,
+                    _ => ActivityEventKind::DeviceError,
+                },
+                Some(ActivityMetadata::DeviceDiagnostic {
+                    category: error.category,
+                    code: error.code,
+                }),
+            ),
             // `Ready` and the remaining device→desktop kinds are observed by the UI layer, not here.
             _ => {}
         }
@@ -309,5 +459,37 @@ impl Session {
             }
             self.rx.extend_from_slice(&chunk[..n]);
         }
+    }
+
+    fn observe(&mut self, kind: ActivityEventKind, metadata: Option<ActivityMetadata>) {
+        self.activity.push(SessionActivity::new(kind, metadata));
+    }
+}
+
+fn device_diagnostic_kind(code: u16) -> ActivityEventKind {
+    match code {
+        1 => ActivityEventKind::DeviceDiagnosticFraming,
+        2 => ActivityEventKind::DeviceDiagnosticChecksum,
+        3 => ActivityEventKind::DeviceDiagnosticVersion,
+        4 => ActivityEventKind::DeviceDiagnosticPayload,
+        5 => ActivityEventKind::DeviceSequenceGap,
+        6 => ActivityEventKind::DeviceDisplayFault,
+        7 => ActivityEventKind::DeviceLinkLost,
+        _ => ActivityEventKind::DeviceDiagnosticUnknown,
+    }
+}
+
+fn malformed_category(error: ProtoError) -> crate::activity::ProtocolMalformedCategory {
+    match error {
+        ProtoError::BadCrc => crate::activity::ProtocolMalformedCategory::Checksum,
+        ProtoError::UnsupportedVersion => crate::activity::ProtocolMalformedCategory::Version,
+        ProtoError::PayloadTooLarge | ProtoError::Postcard => {
+            crate::activity::ProtocolMalformedCategory::Payload
+        }
+        ProtoError::BufferOverflow
+        | ProtoError::Cobs
+        | ProtoError::TooShort
+        | ProtoError::BadMagic
+        | ProtoError::LengthMismatch => crate::activity::ProtocolMalformedCategory::Framing,
     }
 }

@@ -41,3 +41,4 @@ kivori-asset-compiler = { path = "../../../tools/asset-compiler" }
 # The asset compiler (resvg) is a BUILD/test tool only — never a desktop runtime dependency.
 # The app bundles a pre-compiled blob; tests compile one here.
 kivori-asset-compiler = { path = "../../../tools/asset-compiler" }
+serde_json = "1"

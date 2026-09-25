@@ -21,8 +21,8 @@ use kivori_model::{Rect, Rgb565};
 
 /// Byte capacity of each direction of the loopback pipe (one full wire packet plus slack).
 pub const PIPE_CAPACITY: usize = 2048;
-/// Maximum tile records the probe keeps (one 240x240 frame is six 240x40 bands).
-pub const MAX_TILE_RECORDS: usize = 16;
+/// Maximum tile records the probe keeps (one frame plus transition slack).
+pub const MAX_TILE_RECORDS: usize = 64;
 
 /// An in-firmware byte pipe standing in for the host serial link.
 #[derive(Default)]

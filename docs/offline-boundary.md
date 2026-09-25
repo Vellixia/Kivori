@@ -14,7 +14,7 @@ Everything. With the machine fully offline:
 - The connection lifecycle: connect, heartbeat, incompatible-device handling, bounded reconnect, and
   within-process desired-state restoration.
 - Rendering: the shared renderer, the compiled asset blob, and the dev-only Device Studio preview.
-- State control (`set_desired_state` / `mirror_state`) and connection/diagnostics surfacing.
+- State control (`set_desired_state` / `mirror_state`) and connection/typed-session-activity surfacing.
 - App launch: the core starts and reaches its normal idle without waiting on any network I/O.
 
 ## What is prohibited
@@ -31,10 +31,10 @@ Everything. With the machine fully offline:
 
 ## Enforcement
 
-| Guard | Checks |
-|-------|--------|
-| `scripts/check-offline-deps.sh` | No first-party crate (root **and** firmware workspaces) directly depends on a network-client crate (`cargo metadata --no-deps`). |
-| `scripts/check-frontend-offline.mjs` | No remote URLs in `apps/desktop/index.html` or `apps/desktop/src/**` (only the local dev origin is allowed). |
-| `apps/desktop/src-tauri/tests/offline_smoke.rs` | The native core + host-sim device start and reach idle with no external services and no startup network wait. *(Lands with the run-loop wiring.)* |
+| Guard                                           | Checks                                                                                                                                            |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scripts/check-offline-deps.sh`                 | No first-party crate (root **and** firmware workspaces) directly depends on a network-client crate (`cargo metadata --no-deps`).                  |
+| `scripts/check-frontend-offline.mjs`            | No remote URLs in `apps/desktop/index.html` or `apps/desktop/src/**` (only the local dev origin is allowed).                                      |
+| `apps/desktop/src-tauri/tests/offline_smoke.rs` | The native core + host-sim device start and reach idle with no external services and no startup network wait. _(Lands with the run-loop wiring.)_ |
 
 All three run in host CI (`.github/workflows/host.yml`); none require hardware or the internet.

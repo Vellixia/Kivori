@@ -1,19 +1,22 @@
 //! Host-testable runtime coverage (T123): DTO projections + redaction, the sendable production
-//! boundary, the diagnostics ring, and AppState construction/shutdown. The Tauri window/tray behaviour
+//! boundary, the activity ring, and AppState construction/shutdown. The Tauri window/tray behaviour
 //! and the serial device loop are exercised manually (no GUI / no hardware in host CI).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use kivori_desktop::activity::{ActivityEventKind, ActivityLog, ActivityMetadata};
 use kivori_desktop::device::connection::ConnectedDevice;
 use kivori_desktop::device::fsm::{ConnectionManager, ManagerEvent};
-use kivori_desktop::diagnostics::{DiagnosticsLog, SafeDiagnostic};
 use kivori_desktop::ipc::dto;
 use kivori_desktop::orchestrator::Orchestrator;
 use kivori_desktop::runtime::state::{AppState, DeviceCommand};
-use kivori_model::{CompanionState, ConnectionState, ProtocolVersion, SendableState};
-use kivori_protocol::{ErrorCategory, FirmwareVersion};
+use kivori_model::{
+    CompanionState, ConnectionState, MascotAction, MascotPersonality, ProtocolVersion,
+    SendableState,
+};
+use kivori_protocol::FirmwareVersion;
 
 fn connected_device() -> ConnectedDevice {
     ConnectedDevice {
@@ -35,6 +38,7 @@ fn initial_status_is_disconnected_idle() {
     assert_eq!(dto.reported, None);
     assert!(dto.device.is_none());
     assert_eq!(dto.retry_count, 0);
+    assert!(!dto.mascot_interaction);
 }
 
 #[test]
@@ -45,10 +49,19 @@ fn connected_status_projects_all_three_axes() {
     let mut orchestrator = Orchestrator::new();
     orchestrator.set_desired(SendableState::Busy);
 
-    let dto = dto::connection_status(&manager, &orchestrator, Some(CompanionState::Happy));
+    let dto = dto::connection_status(
+        &manager,
+        &orchestrator,
+        Some(CompanionState::Happy),
+        true,
+        None,
+        7,
+    );
     assert_eq!(dto.connection, "connected");
     assert_eq!(dto.desired, "busy");
     assert_eq!(dto.reported.as_deref(), Some("happy"));
+    assert!(dto.mascot_interaction);
+    assert_eq!(dto.connection_generation, 7);
     let device = dto.device.expect("device present when connected");
     assert_eq!(device.firmware_version, "1.4.2");
     assert_eq!(device.device_id_hash_short, "deadbeef");
@@ -60,7 +73,7 @@ fn incompatible_status_carries_reason() {
     let mut manager = ConnectionManager::new();
     manager.apply(ManagerEvent::PortOpened);
     manager.apply(ManagerEvent::HandshakeIncompatible { device_major: 2 });
-    let dto = dto::connection_status(&manager, &Orchestrator::new(), None);
+    let dto = dto::connection_status(&manager, &Orchestrator::new(), None, false, None, 1);
     assert_eq!(dto.connection, "incompatible");
     assert!(dto.incompatible_reason.unwrap().contains("v2"));
     assert!(dto.device.is_none());
@@ -93,37 +106,72 @@ fn sendable_boundary_rejects_device_originated_and_unknown() {
         Some(CompanionState::Offline)
     );
     assert_eq!(dto::companion_from_token("nope"), None);
+    assert_eq!(
+        dto::mascot_action_from_token("tickle"),
+        Some(MascotAction::Tickle)
+    );
+    assert_eq!(dto::mascot_action_from_token("unknown"), None);
+    assert_eq!(
+        dto::mascot_personality_from_token("calm"),
+        Some(MascotPersonality::Calm)
+    );
+    assert_eq!(dto::mascot_personality_from_token("unknown"), None);
 }
 
 #[test]
-fn diagnostic_event_projection_is_redacted() {
-    let diag = SafeDiagnostic::new(ConnectionState::Error, ErrorCategory::Timeout, 2, 750)
-        .with_message_type("Ping")
-        .with_seq(7)
-        .with_device_id(&[0xAB; 16]);
-    let dto = dto::diagnostic_event(&diag, "2026-07-24T00:00:00Z".to_string());
-    assert_eq!(dto.at, "2026-07-24T00:00:00Z");
-    assert_eq!(dto.connection, "error");
-    assert_eq!(dto.category, "timeout");
-    assert_eq!(dto.message_type.as_deref(), Some("Ping"));
-    assert_eq!(dto.seq, Some(7));
-    // Identity is present only as its short hash.
-    assert_eq!(dto.device_id_hash_short.as_deref().map(str::len), Some(8));
+fn activity_event_projection_uses_allowlisted_metadata() {
+    let log = ActivityLog::new(1);
+    let event = log.record(
+        ActivityEventKind::ConnectionStateChanged,
+        Some(ActivityMetadata::Connection {
+            state: ConnectionState::Error,
+            retry_count: 2,
+            elapsed_ms: 750,
+        }),
+    );
+    let activity = dto::activity_event(&event);
+    assert_eq!(
+        activity.event_type,
+        dto::ActivityEventTypeDto::ConnectionStateChanged
+    );
+    assert_eq!(activity.summary, "Connection changed to error.");
+    assert_eq!(
+        activity.metadata.expect("connection metadata").retry_count,
+        2
+    );
 }
 
 #[test]
-fn diagnostics_log_keeps_recent_within_capacity() {
-    let log = DiagnosticsLog::new(3);
-    for retry in 0..5u32 {
+fn activity_log_keeps_recent_within_capacity() {
+    let log = ActivityLog::new(3);
+    for state in [
+        ConnectionState::Connecting,
+        ConnectionState::Connected,
+        ConnectionState::Error,
+        ConnectionState::Disconnected,
+        ConnectionState::Connecting,
+    ] {
         log.record(
-            format!("t{retry}"),
-            SafeDiagnostic::new(ConnectionState::Error, ErrorCategory::Io, retry, retry * 10),
+            ActivityEventKind::ConnectionStateChanged,
+            Some(ActivityMetadata::Connection {
+                state,
+                retry_count: 0,
+                elapsed_ms: 0,
+            }),
         );
     }
     let recent = log.recent(10);
     assert_eq!(recent.len(), 3, "capacity caps the ring");
-    assert_eq!(recent.first().unwrap().0, "t2", "oldest surviving entry");
-    assert_eq!(recent.last().unwrap().0, "t4", "newest entry last");
+    assert_eq!(
+        recent.first().unwrap().summary(),
+        "Connection changed to error.",
+        "oldest surviving entry"
+    );
+    assert_eq!(
+        recent.last().unwrap().summary(),
+        "Connection changed to connecting.",
+        "newest entry last"
+    );
     assert_eq!(log.recent(1).len(), 1, "limit honoured");
 }
 
@@ -138,8 +186,8 @@ fn app_state_with_dummy_thread() -> (AppState, Arc<AtomicBool>) {
         }
     });
     let status = Arc::new(Mutex::new(dto::initial_status()));
-    let diagnostics = Arc::new(DiagnosticsLog::new(8));
-    let state = AppState::new(true, status, diagnostics, tx, Arc::clone(&cancel), thread);
+    let activity_log = Arc::new(ActivityLog::new(8));
+    let state = AppState::new(true, status, activity_log, tx, Arc::clone(&cancel), thread);
     (state, cancel)
 }
 
