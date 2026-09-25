@@ -10,10 +10,10 @@ Fill `Result` with ✅ / ❌ and date; put measurements and observations in `Not
 
 | # | Check | Target | Result | Notes |
 |---|---|---|---|---|
-| 1 | Close the window → it hides; the process keeps running | FR-030 | | |
+| 1 | Close the window → it hides; the process keeps running | FR-030 | ✅ macOS 2026-09-25 · Windows pending | macOS 27, debug build, no device. Closing via the title-bar button hid the window. The process stayed alive, and bringing the app to the front showed no window, so it was hidden rather than moved to another Space. Checked with the CGWindowList on-screen flag. |
 | 2 | While hidden, the device heartbeat + synchronization stay active | SC-007 | | |
-| 3 | Re-activate → the single window reappears | FR-030 | | |
-| 4 | Explicit Quit → the process terminates and the device task stops | FR-030 | | |
+| 3 | Re-activate → the single window reappears | FR-030 | ✅ macOS 2026-09-25 · Windows pending | Second launch: the new instance exits, the original window returns, and there is still one process. **Dock click failed at first:** `RunEvent::Reopen` was not handled. Fixed in `lib.rs` and re-verified: the window returns with one process. |
+| 4 | Explicit Quit → the process terminates and the device task stops | FR-030 | ✅ macOS 2026-09-25 · Windows pending | Tray → Quit: the process exited with code 0 within about 1 s. `AppState::shutdown()` signals and joins the device thread before exit. |
 
 ## Hardware — US1 discovery & connection
 
@@ -43,7 +43,7 @@ Fill `Result` with ✅ / ❌ and date; put measurements and observations in `Not
 | 16 | Replug → auto-reconnect, device returns to `busy` with no user action | < 10 s reconnect+restore (SC-002) | | |
 | 17 | Rapid unplug/replug settles into a stable connected state | FR-010 | | |
 | 18 | USB throughput + transmit-stall recovery under sustained traffic | R-1/R-2 | | |
-| 19 | Full desktop restart → desired state resets to `idle` | clarified | | |
+| 19 | Full desktop restart → desired state resets to `idle` | clarified | | Code review 2026-09-25 (does not tick the row): `Orchestrator::new()` starts at `Idle` with no persistence. The webview saves only personality and self-play, and sends a desired state only on an explicit Mirror click. Needs a connected device to observe. |
 
 ## Hardware — platform & safety
 
@@ -51,7 +51,7 @@ Fill `Result` with ✅ / ❌ and date; put measurements and observations in `Not
 |---|---|---|---|---|
 | 20 | End-to-end latencies within targets: state < 1 s, connect < 5 s, reconnect+restore < 10 s | SC-001/002/004 | | |
 | 21 | esp-hal `usb_serial_jtag` behavior verified on the pinned version | R-2/R-11 | | |
-| 22 | No sensitive data appears in the typed session activity view while connected; no activity log file is created | SC-010 | | |
+| 22 | No sensitive data appears in the typed session activity view while connected; no activity log file is created | SC-010 | | Partial, macOS 2026-09-25: no activity or log file is created. The app writes only WebKit's own storage and stdout. The "while connected" part needs the device. |
 | 23 | Physical panel controller identified and device profile updated | R-3 | ✅ 2026-08-11 | Physical panel confirmed as ST7789. |
 | 24 | Real SPI pin map recorded | R-3 | ✅ 2026-08-11 | SCK GPIO6, MOSI GPIO7, no CS, D/C GPIO2, RST GPIO3, backlight GPIO8 active-high; SPI2 at 20 MHz Mode 3. |
 | 25 | Panel offsets measured and passed to `PanelGeometry` | R-3 | ✅ 2026-08-11 | Physical ST7789 uses controller offset `(0,0)`. |

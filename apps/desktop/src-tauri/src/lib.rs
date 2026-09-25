@@ -93,10 +93,17 @@ pub fn run() {
     builder
         .build(tauri::generate_context!())
         .expect("error while building the Kivori application")
-        .run(|app_handle, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
+        .run(|app_handle, event| match event {
+            tauri::RunEvent::ExitRequested { .. } => {
                 use tauri::Manager;
                 app_handle.state::<runtime::state::AppState>().shutdown();
             }
+            // macOS Dock click while the window is hidden (FR-030 re-activate).
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } => runtime::lifecycle::show_main(app_handle),
+            _ => {}
         });
 }
