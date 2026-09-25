@@ -12,8 +12,8 @@ Mouth groups draw inside the mouth crop (96,134 48x24). No raster images or exte
       <path id="lip" d="M56 158 L184 158 L190 194 Q189 206 176 206 L64 206 Q51 206 50 194 Z" fill="#4fcf9f"/>
     </g>
     <g id="cap">
-      <!-- upper wall wedges: from the top-face corners out to the base edge, down past the base top -->
-      <path id="wedges" d="M53 65 L44 82 L44 116 L196 116 L196 82 L187 65 Z" fill="#35a87c" stroke="#35a87c" stroke-width="3" stroke-linejoin="round"/>
+      <!-- upper walls: leave the top face where its rounded corner ends (y72), curve out to the base edge (x44/196), down past the base top; no stroke so they line up with the base walls exactly -->
+      <path id="wedges" d="M52 72 C50 80 44 84 44 94 L44 116 L196 116 L196 94 C196 84 190 80 188 72 Z" fill="#35a87c"/>
       <rect id="top" x="52" y="56" width="136" height="112" rx="16" fill="#7df2c4"/>
       <path id="legend" d="M67 71 L67 89 M79 71 L69 80.5 L79.5 89" fill="none" stroke="#10131a" stroke-opacity="0.8" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
     </g>
