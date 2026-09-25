@@ -233,6 +233,8 @@ pub struct Runtime<'a> {
     gesture: RotaryGesture,
     /// Session-scoped acceptance and local expiry of the device-rendered `Presentation` overlay.
     presentation: PresentationState,
+    #[cfg(feature = "latency-probe")]
+    latency: crate::latency_probe::LatencyProbe,
 }
 
 impl<'a> Runtime<'a> {
@@ -252,6 +254,8 @@ impl<'a> Runtime<'a> {
             decoder: QuadratureDecoder::new(),
             gesture: RotaryGesture::new(GESTURE_END_MS),
             presentation: PresentationState::new(),
+            #[cfg(feature = "latency-probe")]
+            latency: crate::latency_probe::LatencyProbe::new(),
         }
     }
 
@@ -277,6 +281,13 @@ impl<'a> Runtime<'a> {
     #[must_use]
     pub const fn rejected_frames(&self) -> u32 {
         self.dispatcher.rejected_frames()
+    }
+
+    /// The on-panel latency readout (development-only `latency-probe`).
+    #[cfg(feature = "latency-probe")]
+    #[must_use]
+    pub const fn latency_readout(&self) -> crate::latency_probe::Readout {
+        self.latency.readout()
     }
 
     /// Runs one tick of the production loop.
@@ -343,7 +354,11 @@ impl<'a> Runtime<'a> {
         // session/revision freshness are already enforced by the dispatcher and `PresentationState`
         // themselves, so this is unconditional.
         if let Some(presentation) = self.dispatcher.take_presentation() {
-            self.presentation.apply(&presentation, now);
+            let _applied = self.presentation.apply(&presentation, now);
+            #[cfg(feature = "latency-probe")]
+            if _applied {
+                self.latency.on_presentation(now);
+            }
         }
 
         // 3. Physical input: sample once per tick, turn validated detents into gestures, and emit
@@ -365,12 +380,16 @@ impl<'a> Runtime<'a> {
                 direction,
             } = detent
             {
-                self.dispatcher.send_input_event(
+                let _sent = self.dispatcher.send_input_event(
                     transport,
                     gesture_id,
                     InputKind::Detent(direction),
                     now,
                 );
+                #[cfg(feature = "latency-probe")]
+                if _sent {
+                    self.latency.on_detent(now);
+                }
             }
         }
         if let Some(RotaryEvent::GestureEnded { gesture_id }) = self.gesture.poll(now) {
@@ -407,6 +426,8 @@ impl<'a> Runtime<'a> {
             // it expires locally back to `None` so the panel shows the plain pose once it lapses,
             // with no host timer or round trip needed.
             let overlay = self.presentation.value_at(now);
+            #[cfg(feature = "latency-probe")]
+            self.renderer.set_latency_readout(self.latency.readout());
             let outcome = self.renderer.render_animation_with_overlay(
                 blob,
                 state,
@@ -415,6 +436,12 @@ impl<'a> Runtime<'a> {
                 &mut counting,
             );
             tick.tiles_flushed = counting.flushes;
+            // Tile writes block until the SPI DMA transfer completes, so this clock read is
+            // "frame fully flushed", not "presentation received".
+            #[cfg(feature = "latency-probe")]
+            if outcome.is_ok() {
+                self.latency.on_frame_flushed(clock.now_ms());
+            }
             let failed = counting.failed;
             if outcome.is_err() {
                 // A sink failure is reportable; a missing scene is a build-time bug that must not spin.

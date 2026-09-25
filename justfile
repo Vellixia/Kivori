@@ -57,6 +57,11 @@ fw-test:
 fw-flash:
     cd firmware/esp32-c3 && cargo run --release --features physical-st7789
 
+# DEVELOPMENT ONLY: physical profile plus the on-panel detent -> flush latency readout (Slice 002
+# checklist row 14). Never a product build.
+fw-flash-latency:
+    cd firmware/esp32-c3 && cargo run --release --features physical-st7789,latency-probe
+
 # ---- Wokwi pre-hardware simulation gate (sim/wokwi/README.md) ----
 
 # Build all four simulation artifacts (self-test, external serial, SPI probe, production runtime).

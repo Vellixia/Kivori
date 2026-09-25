@@ -49,6 +49,17 @@ check on the physical ESP32-C3 + HW-040 with a real Windows host.
 |---|---|---|---|---|
 | 14 | **Measured detent → on-panel feedback latency** | **< 50 ms (contract §5)** | | This is a gate, not a note (design spec §10). Slice 002 is not complete while this row is failing or unmeasured. **Two quantisation steps contribute, not one, and every pixel round-trips the desktop — there is no device-local acknowledgement at all.** (a) `apps/desktop/src-tauri/src/runtime/device_task.rs`'s fixed `TICK = 50ms` sleep, and (b) the firmware's `RuntimeConfig::frame_interval_ms = 33` render cadence. Worst case is roughly 50 + serial + 33 ≈ 85 ms against a < 50 ms target, so the measurement is expected to be informative. Neither constant is being pre-emptively changed: the decision is deliberately measure-first. If the measurement misses target, the remedies are, in order, replacing the desktop `TICK` with a short-timeout blocking serial read, then tightening `frame_interval_ms`, then considering device-local feedback; the number must be re-measured before this row can close. |
 
+**Measuring row 14.** Flash the development-only probe build with `just fw-flash-latency`
+(`--features physical-st7789,latency-probe`; never a product build), connect Kivori Desktop, and
+turn the encoder one detent at a time. The top-left corner shows `L` (last reading) over `H` (running
+max) in milliseconds, clamped to 999; nothing is drawn until the first reading completes. Both ends use the
+device's own ms clock: the start is when the `Detent` `InputEvent` is transmitted, the end is when
+the first frame composed after the desktop's answering `Presentation` (new revision only) finishes its
+blocking SPI/DMA tile writes. That is flush completion, not photons — panel scan-out adds up to one
+refresh period on top. A detent with no answer within 1000 ms is dropped; in a fast burst only the
+first detent is timed. Record several single-detent readings plus the `H` value in `Notes`, then
+reflash with `just fw-flash`.
+
 ## Hardware — HW-040 wiring itself
 
 | # | Check | Target | Result | Notes |

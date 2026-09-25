@@ -49,6 +49,8 @@ pub struct TileRenderer<'a> {
     buf: [Rgb565; TILE_PIXELS],
     signatures: [Option<u64>; TILE_COUNT],
     frame_buffer: Option<&'a mut [Rgb565; FRAME_PIXELS]>,
+    #[cfg(feature = "latency-probe")]
+    latency: crate::latency_probe::Readout,
 }
 
 const _: () = assert!(core::mem::size_of::<TileRenderer>() <= 4_096);
@@ -61,6 +63,11 @@ impl<'a> TileRenderer<'a> {
             buf: [Rgb565::from_raw(0); TILE_PIXELS],
             signatures: [None; TILE_COUNT],
             frame_buffer: None,
+            #[cfg(feature = "latency-probe")]
+            latency: crate::latency_probe::Readout {
+                last: None,
+                max: None,
+            },
         }
     }
 
@@ -71,6 +78,12 @@ impl<'a> TileRenderer<'a> {
             frame_buffer: Some(frame_buffer),
             ..Self::new()
         }
+    }
+
+    /// Sets the latency readout composited as the last layer of every following frame.
+    #[cfg(feature = "latency-probe")]
+    pub fn set_latency_readout(&mut self, readout: crate::latency_probe::Readout) {
+        self.latency = readout;
     }
 
     /// Forces every tile to be re-flushed on the next [`Self::render`] (e.g. after a display re-init).
@@ -175,6 +188,8 @@ impl<'a> TileRenderer<'a> {
                     value.at_boundary,
                 );
             }
+            #[cfg(feature = "latency-probe")]
+            crate::latency_probe::draw(&mut band, self.latency);
             let signature = hash_rgb565(band.pixels());
             prepared_signatures[tile] = signature;
             if !buffered && self.signatures[tile] != Some(signature) {
