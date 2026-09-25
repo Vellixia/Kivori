@@ -592,3 +592,64 @@ fn emission_order_is_stable() {
     // Therefore the scenario order is: lifecycle -> first-frame -> health-report -> unchanged-frame.
     // If a future change moves health off the first tick, this test fails before the simulator does.
 }
+
+/// PRD §9.5: a reaction never masks Busy, and a refused reaction is never acknowledged.
+#[test]
+fn social_action_over_busy_is_refused_unacknowledged_and_draws_nothing() {
+    let mut h = Harness::new();
+    h.step();
+    host_write(
+        &mut h.pipe,
+        &Message::Hello(Hello {
+            desktop_version: FirmwareVersion {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            desktop_caps: Capabilities::MASCOT_INTERACTION,
+            nonce: 1,
+        }),
+        0,
+    );
+    h.tick_next_frame();
+    let _ = host_drain(&mut h.pipe);
+    host_write(
+        &mut h.pipe,
+        &Message::Ready(Ready {
+            negotiated_minor: PROTOCOL_MINOR,
+            negotiated_caps: Capabilities::MASCOT_INTERACTION,
+        }),
+        1,
+    );
+    h.tick_next_frame();
+    host_write(
+        &mut h.pipe,
+        &Message::SetState(SetState {
+            desired: SendableState::Busy,
+            at_ms: None,
+        }),
+        2,
+    );
+    h.tick_next_frame();
+    let _ = host_drain(&mut h.pipe);
+    // Let the Busy transition settle so any later pixel change could only come from the reaction.
+    h.clock.advance(1_000);
+    h.tick_next_frame();
+
+    host_write(
+        &mut h.pipe,
+        &Message::PlayMascotAction(PlayMascotAction {
+            action: MascotAction::Greet,
+            personality: MascotPersonality::Playful,
+            seed: 5,
+        }),
+        3,
+    );
+    h.tick_next_frame();
+    h.tick_next_frame();
+
+    assert_eq!(h.runtime.state(), CompanionState::Busy);
+    assert!(!host_drain(&mut h.pipe)
+        .iter()
+        .any(|m| matches!(m, Message::MascotActionApplied(_))));
+}

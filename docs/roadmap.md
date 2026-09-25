@@ -34,7 +34,7 @@ Record: [`features/001-device-connection-foundation/`](./features/001-device-con
 - [x] Build: ESP32-C3 + ST7789 runtime; Wokwi simulation; offline-first boundary
 - [x] Automated: host, firmware host-sim, golden frames, Wokwi scenarios green in CI
 - [ ] Physical: the remaining open rows in the [validation checklist](./features/001-device-connection-foundation/validation-checklist.md)
-      (5 of 25 done), including plug-in → connected in under 5 s, and device output matching the
+      (5 of 25 done; rows 1, 3 and 4 also passed on macOS, and Windows is still to run), including plug-in → connected in under 5 s, and device output matching the
       preview pixel for pixel
 
 ## Phase 2: Mascot, reactions, activity log ✅ software, 🟡 physical
@@ -47,7 +47,8 @@ Record: [`features/003-mascot-animation/`](./features/003-mascot-animation/) (PR
 - [x] Build: typed, session-only activity log, the only runtime log (Log view)
 - [x] Automated: render-parity and golden tests; Wokwi vectors for frame version 2
 - [ ] Physical: every mascot state and reaction on the panel; flash → reconnect to the same port
-- [ ] PRD gate: the personality layer never shows a desktop state that isn't happening (PRD §9.5)
+- [x] PRD gate: the personality layer never shows a desktop state that isn't happening (PRD §9.5).
+      [Review](./features/003-mascot-animation/personality-review.md) found and fixed 3 violations; regression tests added
 
 ## Phase 3: Rotary volume loop (Slice 002) ✅ software, 🟡 physical
 
