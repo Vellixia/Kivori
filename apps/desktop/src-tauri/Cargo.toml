@@ -25,7 +25,7 @@ kivori-framebuffer = { path = "../../../crates/kivori-framebuffer" }
 kivori-renderer = { path = "../../../crates/kivori-renderer" }
 kivori-protocol = { path = "../../../crates/kivori-protocol" }
 heapless = "0.8"  # fixed-capacity buffers for the shared protocol codec (no_std-friendly)
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2"
 serialport = "4"  # production USB-serial transport (research R-5). Windows/macOS build; Linux CI needs libudev-dev.
 serde = { version = "1", features = ["derive"] }
