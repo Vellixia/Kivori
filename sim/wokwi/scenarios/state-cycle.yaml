@@ -15,11 +15,11 @@ steps:
   - wait-serial: 'KIVORI-SIM PASS device-originated-states'
   # The compiled asset bundle is read at runtime (never source art; Constitution XI).
   - wait-serial: 'KIVORI-SIM PASS assets-parsed'
-  # Canonical renderer -> six 240x40 RGB565 tiles with the expected geometry.
+  # Canonical renderer -> thirty-six 40x40 RGB565 tiles with the expected geometry.
   - wait-serial: 'KIVORI-SIM PASS render-ok'
-  - wait-serial: 'KIVORI-SIM PASS tile-count-6'
+  - wait-serial: 'KIVORI-SIM PASS tile-count-36'
   - wait-serial: 'KIVORI-SIM PASS tile-geometry-rgb565'
-  # Change-driven refresh: an identical frame flushes no tiles; a changed frame flushes all six (FR-013).
+  # Change-driven refresh: an identical frame flushes no tiles; a changed frame flushes all tiles (FR-013).
   - wait-serial: 'KIVORI-SIM PASS change-driven-no-reflush'
   - wait-serial: 'KIVORI-SIM PASS change-driven-reflush-on-change'
   # Device diagnostics carry only safe values (ADR-0005).

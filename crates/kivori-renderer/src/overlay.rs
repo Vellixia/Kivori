@@ -29,6 +29,15 @@ pub fn render_volume_overlay(
     confidence: ValueConfidence,
     at_boundary: bool,
 ) {
+    // Tiles the bar does not cover are left untouched (and skip the per-pixel clip loop).
+    let r = band.rect();
+    if r.x >= BAR_X + BAR_W
+        || r.x.saturating_add(r.w) <= BAR_X
+        || r.y >= BAR_Y + BAR_H
+        || r.y.saturating_add(r.h) <= BAR_Y
+    {
+        return;
+    }
     let percent = if percent > 100 { 100 } else { percent };
 
     let track = if at_boundary {

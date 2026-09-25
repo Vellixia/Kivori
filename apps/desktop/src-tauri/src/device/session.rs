@@ -7,17 +7,23 @@
 //! fully host-testable against an in-memory link (and, in the E2E harness, against the real firmware
 //! dispatcher). Malformed inbound frames are dropped without panicking (SC-008).
 
-use crate::device::connection::{build_hello, summarize};
+use crate::activity::{
+    category_for_nonce_error, ActivityEventKind, ActivityMetadata, SessionActivity,
+};
+use crate::device::connection::{build_hello, hash_device_id_short, summarize};
 use crate::device::fsm::{ConnectionManager, ManagerEvent};
 use crate::device::heartbeat::HeartbeatMonitor;
-use crate::device::nonce::{NonceError, NonceSource, OsNonceSource};
+use crate::device::nonce::{NonceSource, OsNonceSource};
 use crate::device::transport::SerialLink;
 use crate::orchestrator::Orchestrator;
-use kivori_model::{Capabilities, CompanionState, ProtocolVersion, SendableState};
+use kivori_model::{
+    Capabilities, CompanionState, MascotAction, MascotPersonality, ProtocolVersion, SendableState,
+};
 use kivori_protocol::{
     decode_frame, decode_message, encode_message, evaluate_hello_ack, Bye, ByeReason,
-    FirmwareVersion, HandshakeOutcome, Hello, InputEvent, Message, Ping, Presentation, ProtoError,
-    SeqClass, SequenceTracker, SetState, MAX_FRAME, MAX_WIRE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
+    FirmwareVersion, HandshakeOutcome, Hello, InputEvent, MascotActionApplied, Message, Ping,
+    PlayMascotAction, Presentation, ProtoError, SeqClass, SequenceTracker, SetState, MAX_FRAME,
+    MAX_WIRE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
 };
 
 /// Static session parameters (the desktop's advertised identity + compatibility).
@@ -42,17 +48,19 @@ impl Default for SessionConfig {
                 patch: 0,
             },
             protocol_version: ProtocolVersion::new(PROTOCOL_MAJOR, PROTOCOL_MINOR),
-            // Slice 002: the desktop implements both the rotary input receive path and the
-            // presentation send path, so it advertises both — negotiation (the intersection with
-            // whatever the device itself advertises) is what actually gates behaviour.
-            capabilities: Capabilities::PHYSICAL_INPUT_V1.union(Capabilities::PRESENTATION_V1),
+            // The desktop implements mascot interaction, the rotary input receive path, and the
+            // presentation send path, so it advertises all three — negotiation (the intersection
+            // with whatever the device itself advertises) is what actually gates behaviour.
+            capabilities: Capabilities::MASCOT_INTERACTION
+                .union(Capabilities::PHYSICAL_INPUT_V1)
+                .union(Capabilities::PRESENTATION_V1),
             supported_majors: vec![PROTOCOL_MAJOR],
         }
     }
 }
 
-/// A session failure. Malformed inbound frames are handled internally (dropped), so only a transport
-/// error is surfaced.
+/// A session failure. Malformed inbound frames are handled internally (dropped), so only transport
+/// and session-nonce failures are surfaced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionError<E> {
     /// The serial link read or write failed.
@@ -74,14 +82,16 @@ pub struct Session {
     /// handshake is accepted, and cleared on every path out of `Connected` (including `Bye`) so a
     /// stale nonce can never be mistaken for a fresh one (no-stale-replay guarantee).
     current_session: Option<u32>,
-    /// The capability set negotiated at the last accepted handshake. Connection-scoped, exactly
-    /// like `current_session`: `Capabilities::NONE` until a handshake is accepted, and cleared on
-    /// every path out of `Connected` so a stale negotiation can never gate a new one's traffic.
-    negotiated_caps: Capabilities,
     heartbeat: HeartbeatMonitor,
     reported: Option<CompanionState>,
-    /// `InputEvent`s decoded this/previous `pump()` calls, awaiting `Self::take_input_events`.
+    /// The capability set negotiated at the last accepted handshake. Connection-scoped, exactly
+    /// like `current_session`.
+    negotiated_caps: Capabilities,
+    /// `InputEvent`s decoded by `pump()`, awaiting [`Session::take_input_events`].
     pending_inputs: Vec<InputEvent>,
+    last_mascot_action_applied: Option<MascotActionApplied>,
+    connection_generation: u32,
+    activity: Vec<SessionActivity>,
 }
 
 impl Session {
@@ -106,11 +116,63 @@ impl Session {
             sent_hello: None,
             nonce_source: source,
             current_session: None,
-            negotiated_caps: Capabilities::NONE,
             heartbeat: HeartbeatMonitor::default(),
             reported: None,
+            negotiated_caps: Capabilities::NONE,
             pending_inputs: Vec::new(),
+            last_mascot_action_applied: None,
+            connection_generation: 0,
+            activity: Vec::new(),
         }
+    }
+
+    /// Opens a session on a freshly-connected port: marks the manager `Connecting` and sends `Hello`.
+    ///
+    /// # Errors
+    /// [`SessionError::Transport`] if the write fails. [`SessionError::NonceUnavailable`] if the OS
+    /// entropy source could not supply a fresh nonce for this attempt — the caller's existing
+    /// backoff/retry handles recovery; this never panics.
+    pub fn open<L: SerialLink>(
+        &mut self,
+        link: &mut L,
+        manager: &mut ConnectionManager,
+    ) -> Result<(), SessionError<L::Error>> {
+        manager.apply(ManagerEvent::PortOpened);
+        self.connection_generation = self.connection_generation.wrapping_add(1).max(1);
+        self.rx.clear();
+        self.inbound = SequenceTracker::new();
+        self.heartbeat = HeartbeatMonitor::default();
+        self.reported = None;
+        self.clear_session_identity();
+        self.pending_inputs.clear();
+        self.last_mascot_action_applied = None;
+        self.activity.clear();
+        let nonce = match self.nonce_source.next_nonce() {
+            Ok(nonce) => nonce,
+            Err(error) => {
+                // No session identity means no no-stale-replay guarantee, so refuse to open a
+                // session rather than proceed without one. This aborts THIS attempt only.
+                self.observe(
+                    ActivityEventKind::SessionNonceUnavailable,
+                    Some(ActivityMetadata::HostDiagnostic {
+                        category: category_for_nonce_error(&error),
+                    }),
+                );
+                return Err(SessionError::NonceUnavailable);
+            }
+        };
+        let hello = build_hello(self.config.app_version, self.config.capabilities, nonce);
+        self.sent_hello = Some(hello);
+        self.send(link, &Message::Hello(hello))?;
+        self.observe(ActivityEventKind::ConnectionOpened, None);
+        self.observe(ActivityEventKind::HandshakeStarted, None);
+        Ok(())
+    }
+
+    /// The device's most recently reported companion state (`None` until the first `StateReport`).
+    #[must_use]
+    pub fn reported(&self) -> Option<CompanionState> {
+        self.reported
     }
 
     /// The nonce of the currently established session, if any.
@@ -131,42 +193,30 @@ impl Session {
         std::mem::take(&mut self.pending_inputs)
     }
 
-    /// Opens a session on a freshly-connected port: marks the manager `Connecting` and sends `Hello`.
-    ///
-    /// # Errors
-    /// [`SessionError::Transport`] if the write fails. [`SessionError::NonceUnavailable`] if the OS
-    /// entropy source could not supply a fresh nonce for this attempt — the caller's existing
-    /// backoff/retry handles recovery; this never panics.
-    pub fn open<L: SerialLink>(
-        &mut self,
-        link: &mut L,
-        manager: &mut ConnectionManager,
-    ) -> Result<(), SessionError<L::Error>> {
-        manager.apply(ManagerEvent::PortOpened);
-        self.rx.clear();
-        self.inbound = SequenceTracker::new();
-        self.heartbeat = HeartbeatMonitor::default();
-        self.reported = None;
-        self.current_session = None;
-        self.negotiated_caps = Capabilities::NONE;
-        self.pending_inputs.clear();
-        let nonce = match self.nonce_source.next_nonce() {
-            Ok(nonce) => nonce,
-            Err(NonceError::Unavailable) => {
-                // No session identity means no no-stale-replay guarantee, so refuse to open a
-                // session rather than proceed without one. This aborts THIS attempt only.
-                return Err(SessionError::NonceUnavailable);
-            }
-        };
-        let hello = build_hello(self.config.app_version, self.config.capabilities, nonce);
-        self.sent_hello = Some(hello);
-        self.send(link, &Message::Hello(hello))
+    /// Whether both peers negotiated transient mascot interactions for this connection.
+    #[must_use]
+    pub fn supports_mascot_interaction(&self) -> bool {
+        self.negotiated_caps
+            .contains(Capabilities::MASCOT_INTERACTION)
     }
 
-    /// The device's most recently reported companion state (`None` until the first `StateReport`).
+    /// Most recent device acknowledgment for a social action in this connection.
     #[must_use]
-    pub fn reported(&self) -> Option<CompanionState> {
-        self.reported
+    pub const fn last_mascot_action_applied(&self) -> Option<MascotActionApplied> {
+        self.last_mascot_action_applied
+    }
+
+    /// Monotonic identity for the current within-process port session.
+    #[must_use]
+    pub const fn connection_generation(&self) -> u32 {
+        self.connection_generation
+    }
+
+    /// Drains observations created while parsing safe session events.
+    ///
+    /// Recording and Tauri emission remain owned by the device task.
+    pub fn drain_activity(&mut self) -> Vec<SessionActivity> {
+        std::mem::take(&mut self.activity)
     }
 
     /// Reads and handles all currently-available inbound frames, driving `manager`/`orchestrator` and
@@ -207,6 +257,31 @@ impl Session {
             self.transmit_set_state(link, state)?;
         }
         Ok(())
+    }
+
+    /// Sends one transient social reaction when the connection negotiated support.
+    ///
+    /// Returns `Ok(false)` without writing when disconnected or paired with older firmware.
+    pub fn play_mascot_action<L: SerialLink>(
+        &mut self,
+        link: &mut L,
+        manager: &ConnectionManager,
+        action: MascotAction,
+        personality: MascotPersonality,
+        seed: u32,
+    ) -> Result<bool, SessionError<L::Error>> {
+        if !manager.state().can_drive_device() || !self.supports_mascot_interaction() {
+            return Ok(false);
+        }
+        self.send(
+            link,
+            &Message::PlayMascotAction(PlayMascotAction {
+                action,
+                personality,
+                seed,
+            }),
+        )?;
+        Ok(true)
     }
 
     /// Sends a heartbeat `Ping` and records it as pending (see [`Session::heartbeat_timed_out`]).
@@ -254,8 +329,13 @@ impl Session {
         let mut scratch: heapless::Vec<u8, MAX_FRAME> = heapless::Vec::new();
         match decode_message(packet, &mut scratch, &self.config.supported_majors) {
             Ok((header, message)) => {
-                if matches!(self.inbound.classify(header.seq), SeqClass::Duplicate) {
-                    return Ok(());
+                match self.inbound.classify(header.seq) {
+                    SeqClass::Duplicate => return Ok(()),
+                    SeqClass::Gap(skipped) => self.observe(
+                        ActivityEventKind::ProtocolSequenceGap,
+                        Some(ActivityMetadata::ProtocolSequenceGap { skipped }),
+                    ),
+                    SeqClass::First | SeqClass::Ok => {}
                 }
                 self.handle_message(header.version, message, link, manager, orchestrator)?;
             }
@@ -268,8 +348,8 @@ impl Session {
                     if manager.apply(ManagerEvent::HandshakeIncompatible {
                         device_major: header.version.major,
                     }) {
-                        self.current_session = None;
-                        self.negotiated_caps = Capabilities::NONE;
+                        self.clear_session_identity();
+                        self.observe(ActivityEventKind::IncompatibleFirmware, None);
                         self.send(
                             link,
                             &Message::Bye(Bye {
@@ -279,7 +359,20 @@ impl Session {
                     }
                 }
             }
-            Err(_) => {} // malformed — drop, never panic (SC-008)
+            Err(error) => {
+                let mut header_scratch: heapless::Vec<u8, MAX_FRAME> = heapless::Vec::new();
+                let safe_header = decode_frame(packet, &mut header_scratch)
+                    .ok()
+                    .map(|(header, _)| header);
+                self.observe(
+                    ActivityEventKind::ProtocolMalformedFrame,
+                    Some(ActivityMetadata::ProtocolMalformed {
+                        category: malformed_category(error),
+                        payload_len: safe_header.map(|header| header.payload_len),
+                        sequence: safe_header.map(|header| header.seq),
+                    }),
+                );
+            }
         }
         Ok(())
     }
@@ -309,23 +402,35 @@ impl Session {
                         // the current session only once the handshake is accepted.
                         self.current_session = Some(sent.nonce);
                         // The handshake is over. Retiring the outstanding `Hello` makes any later
-                        // `HelloAck` fall through the `else` above and be ignored as unsolicited,
-                        // as protocol contract section 8 requires of a message invalid for the
-                        // current phase. Left set, a stray or duplicate ack would be re-evaluated
-                        // as a handshake and a nonce mismatch would take the `BadNonce` arm below,
-                        // tearing down a live session mid-gesture.
+                        // `HelloAck` take the unsolicited path above and be ignored, as protocol
+                        // contract section 8 requires of a message invalid for the current phase.
+                        // Left set, a stray or duplicate ack would be re-evaluated and a nonce
+                        // mismatch would take the `BadNonce` arm, tearing down a live session.
                         self.sent_hello = None;
-                        self.negotiated_caps = ready.negotiated_caps;
                         manager.apply(ManagerEvent::HandshakeOk(summarize(&ack, device_version)));
+                        self.negotiated_caps = ready.negotiated_caps;
+                        self.observe(ActivityEventKind::HandshakeSucceeded, None);
+                        self.observe(
+                            ActivityEventKind::DeviceNegotiated,
+                            Some(ActivityMetadata::Negotiated {
+                                firmware_major: ack.firmware_version.major,
+                                firmware_minor: ack.firmware_version.minor,
+                                firmware_patch: ack.firmware_version.patch,
+                                protocol_major: device_version.major,
+                                protocol_minor: device_version.minor,
+                                device_id_hash_short: hash_device_id_short(&ack.device_id),
+                                capabilities: ready.negotiated_caps.bits(),
+                            }),
+                        );
                         self.send(link, &Message::Ready(ready))?;
                         // Resynchronize the device to our desired state on (re)connect (FR-009).
                         let desired = orchestrator.resync_state();
                         self.transmit_set_state(link, desired)?;
                     }
                     HandshakeOutcome::Incompatible { device_major } => {
-                        self.current_session = None;
-                        self.negotiated_caps = Capabilities::NONE;
+                        self.clear_session_identity();
                         if manager.apply(ManagerEvent::HandshakeIncompatible { device_major }) {
+                            self.observe(ActivityEventKind::IncompatibleFirmware, None);
                             self.send(
                                 link,
                                 &Message::Bye(Bye {
@@ -336,14 +441,59 @@ impl Session {
                     }
                     HandshakeOutcome::BadNonce => {
                         // Identity not confirmed — treat as a failed handshake.
-                        self.current_session = None;
-                        self.negotiated_caps = Capabilities::NONE;
+                        self.clear_session_identity();
                         manager.apply(ManagerEvent::HandshakeTimeout);
+                        self.observe(ActivityEventKind::HandshakeTimedOut, None);
                     }
                 }
             }
             Message::Pong(_) => self.heartbeat.on_pong(),
-            Message::StateReport(report) => self.reported = Some(report.reported),
+            Message::StateReport(report) if self.reported != Some(report.reported) => {
+                self.reported = Some(report.reported);
+                self.observe(
+                    if report.reported == orchestrator.desired().to_companion() {
+                        ActivityEventKind::StateSynchronized
+                    } else {
+                        ActivityEventKind::DeviceStateObserved
+                    },
+                    Some(ActivityMetadata::DeviceState {
+                        reported: report.reported,
+                    }),
+                );
+            }
+            Message::MascotActionApplied(applied) => {
+                self.last_mascot_action_applied = Some(applied);
+                self.observe(
+                    ActivityEventKind::SocialActionApplied,
+                    Some(ActivityMetadata::Action {
+                        state: None,
+                        personality: Some(applied.personality),
+                        self_play: None,
+                        action: Some(applied.action),
+                        seed: Some(applied.seed),
+                        applied_at_ms: Some(applied.applied_at_ms),
+                        autonomous: None,
+                    }),
+                );
+            }
+            Message::Diagnostic(diagnostic) => self.observe(
+                device_diagnostic_kind(diagnostic.code),
+                Some(ActivityMetadata::DeviceDiagnostic {
+                    category: diagnostic.category,
+                    code: diagnostic.code,
+                }),
+            ),
+            Message::Error(error) => self.observe(
+                match error.category {
+                    kivori_protocol::ErrorCategory::Busy => ActivityEventKind::DeviceBusy,
+                    kivori_protocol::ErrorCategory::Timeout => ActivityEventKind::DeviceTimedOut,
+                    _ => ActivityEventKind::DeviceError,
+                },
+                Some(ActivityMetadata::DeviceDiagnostic {
+                    category: error.category,
+                    code: error.code,
+                }),
+            ),
             Message::InputEvent(event) => {
                 // An unnegotiated capability MUST stay completely inert: never queued, never
                 // executed, mirroring the firmware's own receive-side gate on `Presentation`.
@@ -354,12 +504,9 @@ impl Session {
                     self.pending_inputs.push(event);
                 }
             }
-            Message::Bye(_) => {
-                // The device is ending the session: no connection, no session identity.
-                self.current_session = None;
-                self.negotiated_caps = Capabilities::NONE;
-            }
-            // The remaining device→desktop kinds are observed by the UI layer, not here.
+            // The device is ending the session: no connection, no session identity.
+            Message::Bye(_) => self.clear_session_identity(),
+            // `Ready` and the remaining device→desktop kinds are observed by the UI layer, not here.
             _ => {}
         }
         Ok(())
@@ -402,8 +549,7 @@ impl Session {
                     Err(e) => {
                         // A write failure means this connection is gone: no lingering session
                         // identity (a subsequent IoError takes the manager out of `Connected`).
-                        self.current_session = None;
-                        self.negotiated_caps = Capabilities::NONE;
+                        self.clear_session_identity();
                         return Err(SessionError::Transport(e));
                     }
                 };
@@ -423,8 +569,7 @@ impl Session {
                 Ok(n) => n,
                 Err(e) => {
                     // A read failure means this connection is gone: no lingering session identity.
-                    self.current_session = None;
-                    self.negotiated_caps = Capabilities::NONE;
+                    self.clear_session_identity();
                     return Err(SessionError::Transport(e));
                 }
             };
@@ -434,8 +579,45 @@ impl Session {
             self.rx.extend_from_slice(&chunk[..n]);
         }
     }
+
+    /// Drops the connection-scoped session identity and negotiated capabilities.
+    fn clear_session_identity(&mut self) {
+        self.current_session = None;
+        self.negotiated_caps = Capabilities::NONE;
+    }
+
+    fn observe(&mut self, kind: ActivityEventKind, metadata: Option<ActivityMetadata>) {
+        self.activity.push(SessionActivity::new(kind, metadata));
+    }
 }
 
+fn device_diagnostic_kind(code: u16) -> ActivityEventKind {
+    match code {
+        1 => ActivityEventKind::DeviceDiagnosticFraming,
+        2 => ActivityEventKind::DeviceDiagnosticChecksum,
+        3 => ActivityEventKind::DeviceDiagnosticVersion,
+        4 => ActivityEventKind::DeviceDiagnosticPayload,
+        5 => ActivityEventKind::DeviceSequenceGap,
+        6 => ActivityEventKind::DeviceDisplayFault,
+        7 => ActivityEventKind::DeviceLinkLost,
+        _ => ActivityEventKind::DeviceDiagnosticUnknown,
+    }
+}
+
+fn malformed_category(error: ProtoError) -> crate::activity::ProtocolMalformedCategory {
+    match error {
+        ProtoError::BadCrc => crate::activity::ProtocolMalformedCategory::Checksum,
+        ProtoError::UnsupportedVersion => crate::activity::ProtocolMalformedCategory::Version,
+        ProtoError::PayloadTooLarge | ProtoError::Postcard => {
+            crate::activity::ProtocolMalformedCategory::Payload
+        }
+        ProtoError::BufferOverflow
+        | ProtoError::Cobs
+        | ProtoError::TooShort
+        | ProtoError::BadMagic
+        | ProtoError::LengthMismatch => crate::activity::ProtocolMalformedCategory::Framing,
+    }
+}
 #[cfg(test)]
 mod tests {
     //! `HandshakeOutcome::Incompatible` from `evaluate_hello_ack` can never actually be produced

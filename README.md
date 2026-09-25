@@ -10,7 +10,9 @@ Kivori is a physical desktop companion that lets people control their computer t
 
 **Slice 002 — Rotary Volume Control Loop.** Implementation complete and green on CI. Turning the HW-040 knob changes Windows master volume, and the device displays the volume Windows actually reports — the first slice that delivers the product thesis rather than only the link beneath it. **Physical validation is outstanding:** all 15 rows of its checklist are blank, including the measured detent→feedback latency gate, so the slice is *not* closed.
 
-The product contract extends beyond both. Product behavior is defined by the PRD and User Story Contract. Technical research records possibilities and uncertainties; accepted durable technical choices belong in ADRs.
+**Feature 003 — Mascot animation and activity log** ([PR #3](https://github.com/Vellixia/Kivori/pull/3), merged). Expressive, interactive mascot shared by Device Studio and the device, social reactions over the wire (`MASCOT_INTERACTION`), bundled firmware flashing from Device Studio, and a typed session-only activity log. Manual on-device check outstanding.
+
+The product contract extends beyond these. Product behavior is defined by the PRD and User Story Contract. Technical research records possibilities and uncertainties; accepted durable technical choices belong in ADRs.
 
 ## Hardware
 
@@ -98,6 +100,9 @@ Host-sim, Wokwi simulation, and physical hardware are **separate classes of evid
 | Native core ↔ webview IPC contract | [`docs/features/001-device-connection-foundation/contracts/ipc.md`](docs/features/001-device-connection-foundation/contracts/ipc.md) |
 | Slice 002 rotary volume control — records and architecture | [`docs/features/002-rotary-volume-control/`](docs/features/002-rotary-volume-control/) |
 | Slice 002 physical validation ledger (**15 rows, all outstanding**) | [`docs/features/002-rotary-volume-control/validation-checklist.md`](docs/features/002-rotary-volume-control/validation-checklist.md) |
+| Feature 003 mascot animation — record and evidence | [`docs/features/003-mascot-animation/`](docs/features/003-mascot-animation/) |
+| Typed session activity log (the only runtime log) | [`docs/activity-log.md`](docs/activity-log.md) |
+| Flashing bundled firmware from Device Studio | [`docs/firmware-update.md`](docs/firmware-update.md) |
 | Superpowers design records | [`docs/superpowers/specs/`](docs/superpowers/specs/) |
 | Superpowers implementation plans | [`docs/superpowers/plans/`](docs/superpowers/plans/) |
 | Wokwi simulation | [`sim/wokwi/README.md`](sim/wokwi/README.md) |

@@ -49,9 +49,9 @@ fn canonical_postcard_payload_vectors() {
             }),
             &[0x05, 0x00, 0x00],
         ),
-        // Message::InputEvent (variant 11) { session: 1, gesture_id: 2, control: Rotary (0),
+        // Message::InputEvent (variant 13) { session: 1, gesture_id: 2, control: Rotary (0),
         // kind: Detent (1) -> Direction::Ccw (1), device_ms: 3 }
-        // -> [0x0B, 0x01, 0x02, 0x00, 0x01, 0x01, 0x03]
+        // -> [0x0D, 0x01, 0x02, 0x00, 0x01, 0x01, 0x03]
         (
             Message::InputEvent(InputEvent {
                 session: 1,
@@ -60,12 +60,12 @@ fn canonical_postcard_payload_vectors() {
                 kind: InputKind::Detent(Direction::Ccw),
                 device_ms: 3,
             }),
-            &[0x0B, 0x01, 0x02, 0x00, 0x01, 0x01, 0x03],
+            &[0x0D, 0x01, 0x02, 0x00, 0x01, 0x01, 0x03],
         ),
-        // Message::Presentation (variant 12) { session: 9, revision: 6, primary: Active (1),
+        // Message::Presentation (variant 14) { session: 9, revision: 6, primary: Active (1),
         // value: Some -> { kind: Volume (0), current_percent: 64, confidence: Confirmed (1),
         // at_boundary: true }, transient_ms: 7 }
-        // -> [0x0C, 0x09, 0x06, 0x01, 0x01, 0x00, 0x40, 0x01, 0x01, 0x07]
+        // -> [0x0E, 0x09, 0x06, 0x01, 0x01, 0x00, 0x40, 0x01, 0x01, 0x07]
         (
             Message::Presentation(Presentation {
                 session: 9,
@@ -79,7 +79,7 @@ fn canonical_postcard_payload_vectors() {
                 }),
                 transient_ms: 7,
             }),
-            &[0x0C, 0x09, 0x06, 0x01, 0x01, 0x00, 0x40, 0x01, 0x01, 0x07],
+            &[0x0E, 0x09, 0x06, 0x01, 0x01, 0x00, 0x40, 0x01, 0x01, 0x07],
         ),
     ];
     for (msg, expected_payload) in cases {

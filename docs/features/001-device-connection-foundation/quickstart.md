@@ -182,7 +182,7 @@ The Windows startup smoke proves the binary starts and remains alive; it does no
 
 ### 7. Safety and diagnostics
 
-Confirm ordinary diagnostics/logs do not expose raw payload bytes, raw device identity, secrets, usernames, or machine paths beyond the documented allowlist. See [`diagnostics-and-logging.md`](./diagnostics-and-logging.md).
+Confirm ordinary diagnostics/logs do not expose raw payload bytes, raw device identity, secrets, usernames, or machine paths beyond the documented allowlist. See [`activity-log.md`](../../activity-log.md).
 
 ## Acceptance record
 

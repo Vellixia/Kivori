@@ -33,7 +33,7 @@ Fill `Result` with ✅ / ❌ and date; put measurements and observations in `Not
 | 11 | State change appears on the device | < 1 s (SC-004) | | Desktop → device `idle` propagation was observed, but latency was not measured. |
 | 12 | On-device image matches Device Studio preview for a fixed state + elapsed time | SC-005 | | Preview ↔ physical-panel parity has not been manually executed. |
 | 13 | Sustainable SPI frame rate recorded | SC-004 / R-4 | | |
-| 14 | Only semantic state is sent, verified through safe diagnostics | FR-015 | | |
+| 14 | Only semantic state is sent, verified through typed session activity (not payload bytes) | FR-015 | | |
 
 ## Hardware — US3 recovery & restoration
 
@@ -51,7 +51,7 @@ Fill `Result` with ✅ / ❌ and date; put measurements and observations in `Not
 |---|---|---|---|---|
 | 20 | End-to-end latencies within targets: state < 1 s, connect < 5 s, reconnect+restore < 10 s | SC-001/002/004 | | |
 | 21 | esp-hal `usb_serial_jtag` behavior verified on the pinned version | R-2/R-11 | | |
-| 22 | No sensitive data appears in diagnostics/log output while connected | SC-010 | | |
+| 22 | No sensitive data appears in the typed session activity view while connected; no activity log file is created | SC-010 | | |
 | 23 | Physical panel controller identified and device profile updated | R-3 | ✅ 2026-08-11 | Physical panel confirmed as ST7789. |
 | 24 | Real SPI pin map recorded | R-3 | ✅ 2026-08-11 | SCK GPIO6, MOSI GPIO7, no CS, D/C GPIO2, RST GPIO3, backlight GPIO8 active-high; SPI2 at 20 MHz Mode 3. |
 | 25 | Panel offsets measured and passed to `PanelGeometry` | R-3 | ✅ 2026-08-11 | Physical ST7789 uses controller offset `(0,0)`. |

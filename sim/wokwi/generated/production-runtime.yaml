@@ -18,23 +18,23 @@ author: Kivori
 steps:
   - wait-serial: 'KIVORI-RUN READY iface=usb-serial-jtag display=generic-spi'
   - wait-serial: 'KIVORI-RUN PASS lifecycle-booting-to-offline'
-  - wait-serial: 'KIVORI-RUN PASS first-frame-six-tiles'
+  - wait-serial: 'KIVORI-RUN PASS first-frame-36-tiles'
   - wait-serial: 'KIVORI-RUN PASS health-report'
   - wait-serial: 'KIVORI-RUN PASS unchanged-frame-no-reflush'
   # hello: handshake open at the current protocol version
-  - write-serial: [4, 86, 75, 1, 1, 1, 1, 1, 2, 10, 1, 2, 1, 1, 1, 10, 248, 172, 209, 145, 1, 71, 89, 198, 71, 0]
+  - write-serial: [4, 86, 75, 1, 2, 2, 1, 1, 2, 10, 1, 2, 1, 1, 1, 10, 248, 172, 209, 145, 1, 36, 124, 102, 192, 0]
   - wait-serial: 'KIVORI-RUN PASS hello-ack'
   # set_state_idle: desired state idle — expects StateReport(idle)
-  - write-serial: [4, 86, 75, 1, 1, 1, 2, 2, 2, 3, 2, 4, 1, 5, 53, 161, 82, 241, 0]
+  - write-serial: [4, 86, 75, 1, 2, 2, 2, 2, 2, 3, 2, 4, 1, 5, 179, 137, 164, 223, 0]
   - wait-serial: 'KIVORI-RUN PASS state-idle'
   # set_state_happy: desired state happy — expects StateReport(happy)
-  - write-serial: [4, 86, 75, 1, 1, 1, 2, 3, 2, 3, 3, 4, 1, 5, 192, 155, 62, 78, 0]
+  - write-serial: [4, 86, 75, 1, 2, 2, 2, 3, 2, 3, 3, 4, 1, 5, 70, 179, 200, 96, 0]
   - wait-serial: 'KIVORI-RUN PASS state-happy'
   # malformed_cobs: invalid COBS run length — must be dropped without panic (SC-008)
   - write-serial: [5, 255, 1, 0]
   - wait-serial: 'KIVORI-RUN PASS diagnostic label=frame-rejected-framing'
   # ping: heartbeat — expects a Pong echoing the timestamp
-  - write-serial: [4, 86, 75, 1, 1, 1, 2, 1, 2, 3, 4, 6, 146, 33, 4, 151, 32, 204, 0]
+  - write-serial: [4, 86, 75, 1, 2, 2, 2, 1, 2, 3, 8, 6, 146, 33, 134, 191, 214, 226, 0]
   - wait-serial: 'KIVORI-RUN PASS pong'
   - wait-serial: 'KIVORI-RUN PASS recovery-after-reject'
   - wait-serial: 'KIVORI-RUN ALL PASS production-runtime'

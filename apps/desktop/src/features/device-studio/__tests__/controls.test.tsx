@@ -3,6 +3,14 @@ import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { strings } from '../../../lib/i18n/strings';
+
+const ipc = vi.hoisted(() => ({
+  mirrorState: vi.fn(() => Promise.resolve()),
+  playMascotAction: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock('../../../lib/ipc', () => ipc);
+
 import { Controls } from '../Controls';
 import { useStudioStore } from '../store';
 
@@ -21,6 +29,8 @@ function rect(width: number, height: number): DOMRect {
 }
 
 beforeEach(() => {
+  ipc.mirrorState.mockClear();
+  ipc.playMascotAction.mockClear();
   useStudioStore.setState({ state: 'idle', elapsedMs: 0, playing: false });
 
   // Base UI's edge-aligned slider intentionally hides its thumb until it can measure the control.
@@ -44,6 +54,15 @@ describe('Device Studio Controls', () => {
     render(<Controls />);
     await user.click(screen.getByRole('button', { name: strings.studio.states.happy }));
     expect(useStudioStore.getState().state).toBe('happy');
+  });
+
+  it('records a social reaction cue and requests device playback', async () => {
+    const user = userEvent.setup();
+    render(<Controls />);
+    await user.click(screen.getByRole('button', { name: 'Tickle' }));
+    expect(useStudioStore.getState().actionEvents).toHaveLength(1);
+    expect(useStudioStore.getState().actionEvents[0]?.action).toBe('tickle');
+    expect(ipc.playMascotAction).toHaveBeenCalledWith('tickle');
   });
 
   it('play toggles playback', async () => {

@@ -1197,15 +1197,21 @@ fn presentation_message(session: Nonce, revision: u32) -> Message {
     })
 }
 
-#[test]
-fn a_negotiated_presentation_reaches_the_panel_as_a_real_tile_flush() {
+/// Runs Hello -> Ready -> (optionally) Presentation -> one frame, with the desktop claiming
+/// `PRESENTATION_V1` throughout, and returns the captured panel. The mascot animates on its own
+/// clock, so a bare "tiles flushed" count cannot tell overlay pixels from animation pixels; the
+/// tests below compare against a deterministic twin run that never sends the `Presentation`.
+fn presentation_scenario(
+    device_caps: Capabilities,
+    send_presentation: bool,
+) -> Box<CaptureDisplay> {
     let mut runtime = Runtime::new(
-        presentation_gating_identity(Capabilities::PRESENTATION_V1),
+        presentation_gating_identity(device_caps),
         RuntimeConfig::default(),
     );
     let clock = VirtualClock::new();
     let mut pipe = SimPipe::new();
-    let mut display = CaptureDisplay::new();
+    let mut display = Box::new(CaptureDisplay::new());
     let blob_bytes = compile_default_blob();
     let blob = AssetBlob::parse(&blob_bytes).expect("valid blob");
     let mut idle = ScriptedInput::new(script([lv(false, false)]));
@@ -1224,7 +1230,7 @@ fn a_negotiated_presentation_reaches_the_panel_as_a_real_tile_flush() {
         }),
         0,
     );
-    runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
+    runtime.step(&clock, &mut pipe, &mut idle, display.as_mut(), &blob);
     gating_host_write(
         &mut pipe,
         &Message::Ready(Ready {
@@ -1233,17 +1239,45 @@ fn a_negotiated_presentation_reaches_the_panel_as_a_real_tile_flush() {
         }),
         1,
     );
-    runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
+    runtime.step(&clock, &mut pipe, &mut idle, display.as_mut(), &blob);
 
-    gating_host_write(&mut pipe, &presentation_message(nonce, 1), 2);
+    if send_presentation {
+        gating_host_write(&mut pipe, &presentation_message(nonce, 1), 2);
+    }
     clock.advance(33); // cross the frame-interval boundary so the render gate actually fires
-    let tick = runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
-
+    let tick = runtime.step(&clock, &mut pipe, &mut idle, display.as_mut(), &blob);
     assert!(
-        tick.tiles_flushed > 0,
-        "a negotiated Presentation must actually reach the panel as a tile flush, not just \
-         update in-memory state"
+        tick.frame_rendered,
+        "the scenario must end on a rendered frame"
     );
+    display
+}
+
+/// Tile row (40 px tiles) holding the volume bar (y = 180..196).
+const OVERLAY_TILE_ROWS: core::ops::Range<usize> = 160..200;
+
+#[test]
+fn a_negotiated_presentation_reaches_the_panel_as_a_real_tile_flush() {
+    let with = presentation_scenario(Capabilities::PRESENTATION_V1, true);
+    let without = presentation_scenario(Capabilities::PRESENTATION_V1, false);
+
+    assert_ne!(
+        hash_rgb565(with.frame()),
+        hash_rgb565(without.frame()),
+        "a negotiated Presentation must actually reach the panel pixels, not just update \
+         in-memory state"
+    );
+    // The overlay is a layer on top of the mascot pose: every pixel outside the tiles it covers
+    // must be exactly the pose the twin run shows.
+    for y in (0..240).filter(|y| !OVERLAY_TILE_ROWS.contains(y)) {
+        for x in 0..240 {
+            assert_eq!(
+                with.pixel(x, y),
+                without.pixel(x, y),
+                "overlay touched ({x}, {y}) outside the tiles it covers"
+            );
+        }
+    }
 }
 
 #[test]
@@ -1251,49 +1285,13 @@ fn an_unnegotiated_presentation_never_reaches_the_panel() {
     // The desktop over-claims PRESENTATION_V1 in both `Hello` and `Ready`; the DEVICE never
     // advertised it, so the dispatcher's intersection must still gate it out — mirrors
     // `send_input_event_is_inert_when_the_desktop_over_claims_a_capability_the_device_never_advertised`.
-    let mut runtime = Runtime::new(
-        presentation_gating_identity(Capabilities::NONE),
-        RuntimeConfig::default(),
-    );
-    let clock = VirtualClock::new();
-    let mut pipe = SimPipe::new();
-    let mut display = CaptureDisplay::new();
-    let blob_bytes = compile_default_blob();
-    let blob = AssetBlob::parse(&blob_bytes).expect("valid blob");
-    let mut idle = ScriptedInput::new(script([lv(false, false)]));
-    let nonce: Nonce = 0xC0DE_0002;
-
-    gating_host_write(
-        &mut pipe,
-        &Message::Hello(Hello {
-            desktop_version: FirmwareVersion {
-                major: 1,
-                minor: 0,
-                patch: 0,
-            },
-            desktop_caps: Capabilities::PRESENTATION_V1,
-            nonce,
-        }),
-        0,
-    );
-    runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
-    gating_host_write(
-        &mut pipe,
-        &Message::Ready(Ready {
-            negotiated_minor: 0,
-            negotiated_caps: Capabilities::PRESENTATION_V1,
-        }),
-        1,
-    );
-    runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
-
-    gating_host_write(&mut pipe, &presentation_message(nonce, 1), 2);
-    clock.advance(33);
-    let tick = runtime.step(&clock, &mut pipe, &mut idle, &mut display, &blob);
+    let with = presentation_scenario(Capabilities::NONE, true);
+    let without = presentation_scenario(Capabilities::NONE, false);
 
     assert_eq!(
-        tick.tiles_flushed, 0,
-        "an unnegotiated capability must leave the panel completely untouched"
+        hash_rgb565(with.frame()),
+        hash_rgb565(without.frame()),
+        "an unnegotiated capability must leave the panel exactly as it would be without it"
     );
 }
 

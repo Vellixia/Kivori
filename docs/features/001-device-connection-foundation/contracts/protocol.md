@@ -50,13 +50,15 @@ Decoded **frame** layout (all multi-byte fields **little-endian**):
 | 8 | `Health` | V→D | safe health fields |
 | 9 | `Diagnostic` | V→D | `{ category, code }` |
 | 10 | `Error` | both | `{ category, code }` |
-| 11 | `InputEvent` | V→D | `{ session, gesture_id, control, kind, device_ms }` — capability `PHYSICAL_INPUT_V1` (Slice 002) |
-| 12 | `Presentation` | D→V | `{ session, revision, primary, value, transient_ms }` — capability `PRESENTATION_V1` (Slice 002) |
+| 11 | `PlayMascotAction` | D→V | `{ action, personality, seed }` — capability `MASCOT_INTERACTION` (Feature 003) |
+| 12 | `MascotActionApplied` | V→D | `{ action, personality, seed, applied_at_ms }` — capability `MASCOT_INTERACTION` (Feature 003) |
+| 13 | `InputEvent` | V→D | `{ session, gesture_id, control, kind, device_ms }` — capability `PHYSICAL_INPUT_V1` (Slice 002) |
+| 14 | `Presentation` | D→V | `{ session, revision, primary, value, transient_ms }` — capability `PRESENTATION_V1` (Slice 002) |
 
 Frame-version fields are outside the postcard payload so major compatibility can be checked before decoding an incompatible payload.
 
-Tags 11 and 12 were appended by Slice 002 (`docs/features/002-rotary-volume-control/`); tags 0–10 are
-unchanged. Both are capability-gated (§5) and both carry `session`, the connection-scoped session
+Tags 11 and 12 were appended by Feature 003 (mascot, PR #3); tags 13 and 14 by Slice 002
+(`docs/features/002-rotary-volume-control/`); tags 0–10 are unchanged. Slice 002's tags are capability-gated (§5) and both carry `session`, the connection-scoped session
 identity described in [§4.1](#41-nonce-as-connection-scoped-session-identity) below — an unnegotiated
 peer never sends or acts on either message. `InputEvent.control` is `ControlId::Rotary` (extensible);
 `InputEvent.kind` is one of `GestureStarted`, `Detent(Direction)`, `GestureEnded`. `Presentation.value`
@@ -157,13 +159,13 @@ centrally and never reused once retired.
 
 | Bit | Capability | Meaning |
 |---:|---|---|
-| 0 | `PHYSICAL_INPUT_V1` | the device may emit `InputEvent` (tag 11, Slice 002) |
-| 1 | `PRESENTATION_V1` | the device renders `Presentation` (tag 12, Slice 002) |
+| 0 | `MASCOT_INTERACTION` | the device accepts `PlayMascotAction` and acknowledges with `MascotActionApplied` (tags 11/12, Feature 003) |
+| 1 | `PHYSICAL_INPUT_V1` | the device may emit `InputEvent` (tag 13, Slice 002) |
+| 2 | `PRESENTATION_V1` | the device renders `Presentation` (tag 14, Slice 002) |
 
-Both bits follow the same negotiation rule as any other capability: `negotiated_caps = desktop_caps &
+All bits follow the same negotiation rule as any other capability: `negotiated_caps = desktop_caps &
 device_caps`, and a bit set on only one peer leaves the corresponding behavior off rather than
-activating it unilaterally. Feature 001 shipped with zero capability bits allocated; these are the
-first two.
+activating it unilaterally. Feature 001 shipped with zero capability bits allocated; Feature 003 took bit 0 and Slice 002 bits 1–2.
 
 ## 6. Sequence numbers and integrity
 
@@ -209,7 +211,7 @@ The decoder must continue making forward progress and resynchronize at future fr
 | Name | Value | Meaning |
 |---|---|---|
 | `PROTOCOL_MAJOR` | 1 | current major |
-| `PROTOCOL_MINOR` | 0 | current minor |
+| `PROTOCOL_MINOR` | 2 | current minor (1 = Feature 003 mascot, 2 = Slice 002) |
 | `MAGIC` | `0x4B56` | frame magic |
 | `MAX_PAYLOAD` | 512 | max postcard payload bytes |
 | `HANDSHAKE_TIMEOUT` | 1000 ms | handshake deadline |

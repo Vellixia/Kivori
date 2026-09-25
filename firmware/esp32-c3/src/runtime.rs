@@ -37,7 +37,7 @@ use crate::render::TileRenderer;
 use crate::state::{DeviceEvent, DeviceState};
 use kivori_assets::AssetBlob;
 use kivori_model::presentation::{PrimaryState, ValueDisplay};
-use kivori_model::{CompanionState, ElapsedMs};
+use kivori_model::{CompanionState, ElapsedMs, MascotAnimator};
 use kivori_protocol::{InputKind, Message, Nonce, Presentation};
 
 /// Inactivity window, in milliseconds, after which an open rotary gesture ends
@@ -71,6 +71,8 @@ impl Default for RuntimeConfig {
 pub struct Tick {
     /// The state the device holds after this tick.
     pub state: Option<CompanionState>,
+    /// A frame was composed on this tick, even if every tile matched the previous frame.
+    pub frame_rendered: bool,
     /// Tiles flushed to the display this tick.
     pub tiles_flushed: u32,
     /// A safe diagnostic was transmitted.
@@ -215,15 +217,16 @@ impl Default for PresentationState {
 }
 
 /// The production device runtime: lifecycle, protocol, rendering, and diagnostics.
-pub struct Runtime {
+pub struct Runtime<'a> {
     dispatcher: Dispatcher,
     device: DeviceState,
-    renderer: TileRenderer,
+    renderer: TileRenderer<'a>,
     config: RuntimeConfig,
     booted: bool,
     next_frame_ms: ElapsedMs,
     next_health_ms: ElapsedMs,
     last_rendered: Option<CompanionState>,
+    animator: MascotAnimator,
     /// Turns raw quadrature levels into validated logical detents (never raw electrical edges).
     decoder: QuadratureDecoder,
     /// Groups validated detents into gestures (identity + the 250 ms inactivity boundary).
@@ -232,7 +235,7 @@ pub struct Runtime {
     presentation: PresentationState,
 }
 
-impl Runtime {
+impl<'a> Runtime<'a> {
     /// Creates the runtime for a device advertising `identity`.
     #[must_use]
     pub fn new(identity: DeviceIdentity, config: RuntimeConfig) -> Self {
@@ -245,9 +248,22 @@ impl Runtime {
             next_frame_ms: 0,
             next_health_ms: 0,
             last_rendered: None,
+            animator: MascotAnimator::new(CompanionState::Booting, 0),
             decoder: QuadratureDecoder::new(),
             gesture: RotaryGesture::new(GESTURE_END_MS),
             presentation: PresentationState::new(),
+        }
+    }
+
+    /// Creates a runtime that composes a complete frame before starting display transfers.
+    pub fn with_frame_buffer(
+        identity: DeviceIdentity,
+        config: RuntimeConfig,
+        frame_buffer: &'a mut [kivori_model::Rgb565; crate::render::FRAME_PIXELS],
+    ) -> Self {
+        Self {
+            renderer: TileRenderer::with_frame_buffer(frame_buffer),
+            ..Self::new(identity, config)
         }
     }
 
@@ -298,6 +314,7 @@ impl Runtime {
             .is_err()
         {
             let _ = self.device.apply(DeviceEvent::LinkDown);
+            self.dispatcher.note_diagnostic(DeviceDiagnostic::LinkLost);
             self.dispatcher.note_diagnostic(DeviceDiagnostic::LinkLost);
             // A transport failure is a session boundary too, even with no `Bye`: clear the
             // accepted session/negotiated capability so a stale gesture cannot keep emitting
@@ -361,13 +378,23 @@ impl Runtime {
                 .send_input_event(transport, gesture_id, InputKind::GestureEnded, now);
         }
 
-        // 4. Render on the frame cadence: only changed tiles reach the panel (FR-013). A state change
-        //    invalidates the cache, because the previous frame's tiles belong to a different scene.
+        // Resolve changes immediately after protocol handling. Reporting remains semantic and does
+        // not wait for the visual transition. Pixel hashes still detect which bands changed.
+        let state = self.device.current();
+        if self.animator.target() != state {
+            self.animator.set_state(state, now);
+        }
+        if let Some(action) = self.dispatcher.take_mascot_action() {
+            self.animator
+                .trigger_action(action.action, action.personality, action.seed, now);
+        }
+        // 4. Render on the frame cadence: only changed tiles reach the panel (FR-013).
         if now >= self.next_frame_ms {
-            self.next_frame_ms = now.saturating_add(self.config.frame_interval_ms);
+            self.next_frame_ms =
+                next_frame_deadline(self.next_frame_ms, now, self.config.frame_interval_ms);
+            tick.frame_rendered = true;
             let state = self.device.current();
             if self.last_rendered != Some(state) {
-                self.renderer.invalidate();
                 self.last_rendered = Some(state);
             }
             let mut counting = CountingSink {
@@ -375,12 +402,18 @@ impl Runtime {
                 flushes: 0,
                 failed: false,
             };
-            // The transient overlay, if still in force; expired locally back to `None` so the
-            // panel shows plain `state` once it lapses, with no host timer or round trip needed.
+            let pose = self.animator.pose_at(now);
+            // The transient overlay, if still in force, is composited on top of the mascot pose;
+            // it expires locally back to `None` so the panel shows the plain pose once it lapses,
+            // with no host timer or round trip needed.
             let overlay = self.presentation.value_at(now);
-            let outcome =
-                self.renderer
-                    .render_with_overlay(blob, state, now, overlay, &mut counting);
+            let outcome = self.renderer.render_animation_with_overlay(
+                blob,
+                state,
+                &pose,
+                overlay,
+                &mut counting,
+            );
             tick.tiles_flushed = counting.flushes;
             let failed = counting.failed;
             if outcome.is_err() {
@@ -421,6 +454,20 @@ impl Runtime {
     }
 }
 
+fn next_frame_deadline(
+    previous_deadline_ms: ElapsedMs,
+    now_ms: ElapsedMs,
+    interval_ms: ElapsedMs,
+) -> ElapsedMs {
+    let interval_ms = interval_ms.max(1);
+    let elapsed_intervals = now_ms.saturating_sub(previous_deadline_ms) / interval_ms;
+    previous_deadline_ms.saturating_add(
+        elapsed_intervals
+            .saturating_add(1)
+            .saturating_mul(interval_ms),
+    )
+}
+
 /// Free SRAM in bytes.
 ///
 /// Measuring genuine heap/stack headroom needs linker symbols and a stack-watermark scheme that only means
@@ -445,7 +492,7 @@ pub fn run<C, T, I, D>(
     input: &mut I,
     display: &mut D,
     blob: &AssetBlob,
-    mut observe: impl FnMut(&Tick, &mut T),
+    observe: impl FnMut(&Tick, &mut T),
 ) -> !
 where
     C: Clock,
@@ -454,6 +501,63 @@ where
     D: DisplaySink,
 {
     let mut runtime = Runtime::new(identity, config);
+    run_loop(
+        &mut runtime,
+        clock,
+        transport,
+        input,
+        display,
+        blob,
+        observe,
+    )
+}
+
+/// Runs the same production loop with caller-owned frame staging memory.
+#[allow(clippy::too_many_arguments)]
+pub fn run_buffered<C, T, I, D>(
+    identity: DeviceIdentity,
+    config: RuntimeConfig,
+    clock: &C,
+    transport: &mut T,
+    input: &mut I,
+    display: &mut D,
+    blob: &AssetBlob,
+    frame_buffer: &mut [kivori_model::Rgb565; crate::render::FRAME_PIXELS],
+    observe: impl FnMut(&Tick, &mut T),
+) -> !
+where
+    C: Clock,
+    T: Transport,
+    I: InputSource,
+    D: DisplaySink,
+{
+    let mut runtime = Runtime::with_frame_buffer(identity, config, frame_buffer);
+    run_loop(
+        &mut runtime,
+        clock,
+        transport,
+        input,
+        display,
+        blob,
+        observe,
+    )
+}
+
+fn run_loop<C, T, I, D>(
+    runtime: &mut Runtime<'_>,
+    clock: &C,
+    transport: &mut T,
+    input: &mut I,
+    display: &mut D,
+    blob: &AssetBlob,
+    mut observe: impl FnMut(&Tick, &mut T),
+) -> !
+where
+    C: Clock,
+    T: Transport,
+    I: InputSource,
+    D: DisplaySink,
+{
     loop {
         let tick = runtime.step(clock, transport, input, display, blob);
         // The observer receives the transport so a simulation mode can emit text markers over the same

@@ -36,8 +36,8 @@ desktop physically, understand the desktop visually* — rather than only establ
 - HW-040 A/B decoding to validated logical detents in firmware, with a legal electrical transition
   distinguished from a completed mechanical detent (contract invariant 46).
 - Rotary gesture formation and the 250 ms gesture-end boundary in firmware.
-- Two capability-gated protocol variants: device→desktop `InputEvent` (tag 11), desktop→device
-  `Presentation` (tag 12).
+- Two capability-gated protocol variants: device→desktop `InputEvent` (tag 13), desktop→device
+  `Presentation` (tag 14).
 - The first two allocated protocol capability bits: `PHYSICAL_INPUT_V1`, `PRESENTATION_V1`.
 - Connection-scoped session identity on both new messages, reusing the handshake nonce, enforcing
   no-stale-replay (contract invariant 5) and scoping presentation revisions to the session.

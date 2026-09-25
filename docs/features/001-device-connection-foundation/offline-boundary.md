@@ -14,7 +14,7 @@ Everything in the Feature 001 foundation. With the machine fully offline:
 - Device discovery and handshake.
 - Connection lifecycle, reconnect, and within-process desired-state restoration.
 - Shared rendering, compiled assets, and Device Studio preview.
-- State control and connection/diagnostics surfacing.
+- State control and connection/typed-session-activity surfacing.
 - App launch without waiting on network I/O.
 
 ## What is prohibited by the current Feature 001 implementation boundary

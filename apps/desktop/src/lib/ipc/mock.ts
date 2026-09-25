@@ -4,7 +4,7 @@
 // Vite/Rollup drop it entirely from production Tauri bundles (T124). The sentinel below is asserted
 // absent from the production build by `scripts/check-mock-excluded.mjs`.
 
-import type { AppInfoDto, CompanionState, ConnectionStatusDto, DiagnosticEventDto } from './types';
+import type { ActivityEventDto, AppInfoDto, CompanionState, ConnectionStatusDto } from './types';
 import { COMPANION_STATES, PREVIEW_DIM } from './types';
 
 /// A unique marker string; `scripts/check-mock-excluded.mjs` fails if it appears in a prod bundle.
@@ -27,6 +27,9 @@ export function mockConnectionStatus(): ConnectionStatusDto {
     device: null,
     incompatibleReason: null,
     retryCount: 0,
+    connectionGeneration: 0,
+    mascotInteraction: false,
+    mascotAction: null,
   };
 }
 
@@ -34,7 +37,7 @@ export function mockListStates(): CompanionState[] {
   return [...COMPANION_STATES];
 }
 
-export function mockDiagnostics(): DiagnosticEventDto[] {
+export function mockActivityLog(): ActivityEventDto[] {
   return [];
 }
 

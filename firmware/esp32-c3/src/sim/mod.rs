@@ -304,7 +304,9 @@ pub fn handshaken_dispatcher(nonce: Nonce) -> Dispatcher {
             minor: 0,
             patch: 0,
         },
-        capabilities: Capabilities::PHYSICAL_INPUT_V1.union(Capabilities::PRESENTATION_V1),
+        capabilities: Capabilities::MASCOT_INTERACTION
+            .union(Capabilities::PHYSICAL_INPUT_V1)
+            .union(Capabilities::PRESENTATION_V1),
     };
     let mut dispatcher = Dispatcher::new(identity);
     let mut pipe = SimPipe::new();

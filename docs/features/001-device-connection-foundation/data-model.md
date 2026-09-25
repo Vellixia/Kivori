@@ -202,8 +202,10 @@ Pong
 Health
 Diagnostic
 Error
-InputEvent      -- tag 11, Slice 002, capability PHYSICAL_INPUT_V1
-Presentation    -- tag 12, Slice 002, capability PRESENTATION_V1
+PlayMascotAction    -- tag 11, Feature 003, capability MASCOT_INTERACTION
+MascotActionApplied -- tag 12, Feature 003, capability MASCOT_INTERACTION
+InputEvent      -- tag 13, Slice 002, capability PHYSICAL_INPUT_V1
+Presentation    -- tag 14, Slice 002, capability PRESENTATION_V1
 ```
 
 Inbound frames are validated for framing, payload length, CRC and sequence classification before semantic dispatch. Malformed input must be rejected without panicking. Future messages are added only under the protocol/version/capability rules described above.
@@ -251,7 +253,7 @@ against any prior session's.
 
 Safe diagnostics carry only allowlisted metadata such as state/category/message kind/length/sequence/retry timing and a short identity correlation value. They do not carry raw payloads, raw device identity, secrets, or unnecessary user/machine paths.
 
-See [`diagnostics-and-logging.md`](./diagnostics-and-logging.md) and [ADR-0005](../../adr/0005-logging-policy.md).
+See [`activity-log.md`](../../activity-log.md) and [ADR-0005](../../adr/0005-logging-policy.md).
 
 ## Scope boundary
 

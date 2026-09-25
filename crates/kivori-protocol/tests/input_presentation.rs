@@ -112,7 +112,7 @@ fn every_value_confidence_roundtrips() {
 
 /// The postcard variant index IS the wire tag. Existing tags 0..=10 must not move.
 #[test]
-fn new_variants_are_appended_at_tags_11_and_12() {
+fn new_variants_are_appended_at_tags_13_and_14() {
     assert_eq!(
         payload_tag(&Message::InputEvent(InputEvent {
             session: 0,
@@ -121,8 +121,8 @@ fn new_variants_are_appended_at_tags_11_and_12() {
             kind: InputKind::GestureEnded,
             device_ms: 0,
         })),
-        11,
-        "InputEvent must be wire tag 11"
+        13,
+        "InputEvent must be wire tag 13"
     );
 
     assert_eq!(
@@ -133,15 +133,15 @@ fn new_variants_are_appended_at_tags_11_and_12() {
             value: None,
             transient_ms: 0,
         })),
-        12,
-        "Presentation must be wire tag 12"
+        14,
+        "Presentation must be wire tag 14"
     );
 }
 
 #[test]
 fn the_two_new_capability_bits_are_distinct_and_stable() {
-    assert_eq!(Capabilities::PHYSICAL_INPUT_V1.bits(), 1 << 0);
-    assert_eq!(Capabilities::PRESENTATION_V1.bits(), 1 << 1);
+    assert_eq!(Capabilities::PHYSICAL_INPUT_V1.bits(), 1 << 1);
+    assert_eq!(Capabilities::PRESENTATION_V1.bits(), 1 << 2);
 }
 
 #[test]

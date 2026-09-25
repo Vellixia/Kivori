@@ -15,16 +15,20 @@ pub struct Capabilities(u32);
 impl Capabilities {
     /// The empty capability set.
     pub const NONE: Capabilities = Capabilities(0);
-
     // CAPABILITY BIT REGISTRY — allocate centrally, never reuse a retired bit.
-    //   bit 0  PHYSICAL_INPUT_V1  Slice 002
-    //   bit 1  PRESENTATION_V1    Slice 002
+    //   bit 0  MASCOT_INTERACTION  mascot animation (PR #3)
+    //   bit 1  PHYSICAL_INPUT_V1   Slice 002
+    //   bit 2  PRESENTATION_V1     Slice 002
 
-    /// Bit 0 — the device may emit `InputEvent` (Slice 002, rotary input).
-    pub const PHYSICAL_INPUT_V1: Capabilities = Capabilities(1 << 0);
+    /// Bit 0 — device accepts deterministic social mascot actions and returns applied-time
+    /// acknowledgments.
+    pub const MASCOT_INTERACTION: Capabilities = Capabilities(1 << 0);
 
-    /// Bit 1 — the device renders semantic `Presentation` (Slice 002).
-    pub const PRESENTATION_V1: Capabilities = Capabilities(1 << 1);
+    /// Bit 1 — the device may emit `InputEvent` (Slice 002, rotary input).
+    pub const PHYSICAL_INPUT_V1: Capabilities = Capabilities(1 << 1);
+
+    /// Bit 2 — the device renders semantic `Presentation` (Slice 002).
+    pub const PRESENTATION_V1: Capabilities = Capabilities(1 << 2);
 
     /// Creates a capability set from a raw bitmask.
     #[must_use]

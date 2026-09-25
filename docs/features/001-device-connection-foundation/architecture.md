@@ -45,11 +45,11 @@ These are Feature 001 state models, not a claim that all future product state be
 ## Runtime shape
 
 - **Firmware** ([`firmware/esp32-c3/src`](../../../firmware/esp32-c3/src)): a `no_std` core written against hardware-neutral transport/display/clock ports plus the physical ESP32-C3 runtime and host simulation adapters.
-- **Desktop core** ([`apps/desktop/src-tauri/src`](../../../apps/desktop/src-tauri/src)): discovery, handshake verification, connection/reconnect state, session handling, diagnostics, window lifecycle, and preview rendering.
+- **Desktop core** ([`apps/desktop/src-tauri/src`](../../../apps/desktop/src-tauri/src)): discovery, handshake verification, connection/reconnect state, session handling, typed session activity, window lifecycle, and preview rendering.
 - **Frontend** ([`apps/desktop/src`](../../../apps/desktop/src)): React UI consuming typed IPC and native-rendered preview data.
 
 ## Cross-cutting guarantees
 
 - **Deterministic rendering:** integer-based, golden-frame tested, and shared across host/device paths.
 - **Offline-first Feature 001 boundary:** see [`offline-boundary.md`](./offline-boundary.md).
-- **Least privilege + privacy:** ADR-0005 and [`diagnostics-and-logging.md`](./diagnostics-and-logging.md) define the implemented diagnostics/logging boundary.
+- **Least privilege + privacy:** ADR-0005 and [`activity-log.md`](../../activity-log.md) define the typed session activity boundary (the earlier `diagnostics` module and `diagnostics-and-logging.md` were replaced by the activity log in PR #3).

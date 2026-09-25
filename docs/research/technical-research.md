@@ -4,7 +4,7 @@
 **Status**: Technical research and suggested implementation guidance  
 **Product requirements**: [`../PRD.md`](../PRD.md)  
 **Behavior contract**: [`./user-story-contract.md`](./user-story-contract.md)  
-**Current foundation**: [`./architecture.md`](./architecture.md), [`../specs/001-device-connection-foundation/research.md`](../specs/001-device-connection-foundation/research.md)
+**Current foundation**: [`architecture.md`](../features/001-device-connection-foundation/architecture.md), [`research.md`](../features/001-device-connection-foundation/research.md)
 
 **Purpose**: Research technical approaches that can implement the Kivori PRD and User Story Contract on the current repository foundation, with explicit consideration for Windows, macOS, Linux/X11, Linux/Wayland, ESP32-C3 firmware, release/update delivery, hardware recovery, permissions, multi-user ownership, and validation constraints. Each research item is stated as **Decision · Rationale · Alternatives · Caveats**, following the style of the Feature 001 research document.
 
@@ -987,9 +987,9 @@ Primary/vendor/standards references used for this research; exact API/version mu
 
 ### Kivori repository
 
-- [`docs/architecture.md`](./architecture.md)
-- [`docs/offline-boundary.md`](./offline-boundary.md)
-- [`specs/001-device-connection-foundation/research.md`](../specs/001-device-connection-foundation/research.md)
+- [`features/001-device-connection-foundation/architecture.md`](../features/001-device-connection-foundation/architecture.md)
+- [`features/001-device-connection-foundation/offline-boundary.md`](../features/001-device-connection-foundation/offline-boundary.md)
+- [`features/001-device-connection-foundation/research.md`](../features/001-device-connection-foundation/research.md)
 - `apps/desktop/src-tauri/src/runtime/device_task.rs`, `device/session.rs`, `device/serial.rs`, `orchestrator/mod.rs`
 - `crates/kivori-protocol`, `crates/kivori-model`
 - `firmware/esp32-c3/src/runtime.rs`, `transport.rs`, `physical_st7789.rs`, `profile.rs`

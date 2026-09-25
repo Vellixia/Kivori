@@ -15,6 +15,23 @@ pub type FontId = u16;
 /// Index of a compiled string in the asset blob's string table.
 pub type StringId = u16;
 
+/// Semantic role of an asset layer in the shared mascot composition contract.
+///
+/// `Static` preserves generic scene behavior. The remaining roles are composed using a
+/// [`crate::MascotPose`]: the body and its children share a bottom-centre transform, while eyes
+/// additionally receive the blink squash and mouths/eyes are cross-faded by expression weights.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LayerRole {
+    /// A generic layer unaffected by mascot pose composition.
+    Static,
+    /// The mascot body, including baked shading, cheeks, and shine.
+    Body,
+    /// The interchangeable pair of eyes.
+    Eyes,
+    /// The interchangeable mouth expression.
+    Mouth,
+}
+
 /// One keyframe of a layer's timeline. At `at_ms` (and until the next keyframe), the layer uses this
 /// transform, sprite frame, and visibility. Animation is **step-held** — no interpolation — so
 /// rendering stays integer-only and byte-identical across host and device (ADR-0004 decision 4).

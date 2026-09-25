@@ -15,7 +15,7 @@ HW-040 A/B/SW pins
   → InputSource port (firmware, hardware-neutral)              firmware/esp32-c3/src/ports.rs
   → QuadratureDecoder (electrical → validated logical detent)  firmware/esp32-c3/src/input/quadrature.rs
   → RotaryGesture (detent → gesture identity + 250 ms boundary) firmware/esp32-c3/src/input/gesture.rs
-  → InputEvent (capability-gated, session-stamped)              crates/kivori-protocol/src/message.rs (tag 11)
+  → InputEvent (capability-gated, session-stamped)              crates/kivori-protocol/src/message.rs (tag 13)
   → wire (COBS/CRC/postcard, ADR-0002)
   → Session::pump decode + InputIngress (session/gesture freshness) apps/desktop/src-tauri/src/{device/session.rs, input/mod.rs}
   → resolve_binding (single Global binding: Rotary → MasterVolume) apps/desktop/src-tauri/src/action/mod.rs
@@ -23,7 +23,7 @@ HW-040 A/B/SW pins
   → GestureValue (preview ownership + reconciliation)           apps/desktop/src-tauri/src/action/gesture_value.rs
   → VolumeBackend (Windows Core Audio; deterministic fake)      apps/desktop/src-tauri/src/platform/{windows/mod.rs, mod.rs}
   → PresentationResolver (ProductSnapshot → Presentation)       apps/desktop/src-tauri/src/presentation/mod.rs
-  → Presentation (capability-gated, session-stamped, revisioned) crates/kivori-protocol/src/message.rs (tag 12)
+  → Presentation (capability-gated, session-stamped, revisioned) crates/kivori-protocol/src/message.rs (tag 14)
   → wire
   → firmware dispatch: expire `value` after transient_ms, fall back to `primary`  firmware/esp32-c3/src/proto.rs, runtime.rs
   → render_volume_overlay (shared, deterministic, confidence-distinct)  crates/kivori-renderer/src/overlay.rs
@@ -65,13 +65,14 @@ gesture as `GestureEnded`. A direction reversal never splits a gesture.
 
 ### 3. Protocol — two appended variants
 
-Tags 0–10 are untouched; `Capabilities` receives its first two allocated bits. See the updated
+Tags 0–12 are untouched (11/12 belong to Feature 003's mascot messages); Slice 002 takes capability
+bits 1 and 2 after Feature 003's `MASCOT_INTERACTION` (bit 0). See the updated
 [`protocol.md`](../001-device-connection-foundation/contracts/protocol.md) §3/§5 for the normative
 table. In brief:
 
-- Tag 11, `InputEvent` (device→desktop): `{ session, gesture_id, control, kind, device_ms }`,
+- Tag 13, `InputEvent` (device→desktop): `{ session, gesture_id, control, kind, device_ms }`,
   gated by `PHYSICAL_INPUT_V1`.
-- Tag 12, `Presentation` (desktop→device): `{ session, revision, primary, value, transient_ms }`,
+- Tag 14, `Presentation` (desktop→device): `{ session, revision, primary, value, transient_ms }`,
   gated by `PRESENTATION_V1`.
 
 `ValueConfidence` (`Preview` / `Confirmed` / `Unverified`) exists so an optimistic local preview can

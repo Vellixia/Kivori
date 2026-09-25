@@ -6,7 +6,7 @@
 
 use heapless::Vec;
 use kivori_model::{
-    CompanionState, DeviceProfile, FrameRate, Keyframe, LayerKind, Point, Rgb565, Size,
+    CompanionState, DeviceProfile, FrameRate, Keyframe, LayerKind, LayerRole, Point, Rgb565, Size,
 };
 use serde::{Deserialize, Serialize};
 
@@ -30,7 +30,7 @@ pub struct PoolRef {
     pub len: u32,
 }
 
-/// A compiled sprite bitmap: RGB565 pixels for one or more equally-sized sprite-sheet frames.
+/// A compiled sprite bitmap: RGB565 pixels plus optional packed alpha for one or more frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BitmapEntry {
     /// Size of a single frame in pixels.
@@ -39,6 +39,11 @@ pub struct BitmapEntry {
     pub frames: u16,
     /// RGB565 pixel bytes in the data pool (`frames * size.w * size.h * 2` bytes).
     pub data: PoolRef,
+    /// Optional packed alpha4 bytes in the data pool.
+    ///
+    /// There is one nibble per pixel (`ceil(frames * width * height / 2)` bytes); even pixel
+    /// indices are stored in the low nibble. `None` means every source pixel is fully opaque.
+    pub alpha: Option<PoolRef>,
 }
 
 /// One layer of a scene: what it draws, where, and its keyframe timeline.
@@ -46,6 +51,8 @@ pub struct BitmapEntry {
 pub struct LayerDef {
     /// What the layer draws.
     pub kind: LayerKind,
+    /// Semantic mascot composition role for this layer.
+    pub role: LayerRole,
     /// The layer's base origin (before keyframe offsets).
     pub origin: Point,
     /// The layer's step-held keyframe timeline (sorted ascending by `at_ms`).

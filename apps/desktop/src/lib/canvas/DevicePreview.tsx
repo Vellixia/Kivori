@@ -1,7 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { renderPreviewFrame } from '../ipc';
-import type { CompanionState } from '../ipc/types';
+import type { CompanionState, AnimationTimeline } from '../ipc/types';
 import { PREVIEW_DIM } from '../ipc/types';
 import { blitRgba } from './blit';
 
@@ -16,6 +16,8 @@ interface DevicePreviewProps {
    * Either way the bytes come from the shared Rust renderer — the canvas never draws content itself.
    */
   frame?: Uint8ClampedArray | null;
+  animation?: AnimationTimeline;
+  streaming?: boolean;
 }
 
 /** Blits the current preview frame onto a blit-only canvas. */
@@ -24,8 +26,11 @@ export function DevicePreview({
   elapsedMs,
   label,
   frame = null,
+  animation,
+  streaming = false,
 }: DevicePreviewProps): ReactElement {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // Streamed path: blit whatever the native producer pushed.
   useEffect(() => {
@@ -36,26 +41,34 @@ export function DevicePreview({
 
   // On-demand path: request the exact frame for this (state, elapsedMs).
   useEffect(() => {
-    if (frame) return;
+    if (frame || streaming) return;
     let cancelled = false;
-    void renderPreviewFrame(state, elapsedMs).then((rgba) => {
-      if (cancelled) return;
-      const ctx = canvasRef.current?.getContext('2d');
-      if (ctx) blitRgba(ctx, rgba, PREVIEW_DIM);
-    });
+    setError(null);
+    void renderPreviewFrame(state, elapsedMs, animation)
+      .then((rgba) => {
+        if (cancelled) return;
+        const ctx = canvasRef.current?.getContext('2d');
+        if (ctx) blitRgba(ctx, rgba, PREVIEW_DIM);
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) setError(String(reason));
+      });
     return () => {
       cancelled = true;
     };
-  }, [state, elapsedMs, frame]);
+  }, [state, elapsedMs, frame, animation, streaming]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      width={PREVIEW_DIM}
-      height={PREVIEW_DIM}
-      role="img"
-      aria-label={label}
-      className="device-preview"
-    />
+    <>
+      <canvas
+        ref={canvasRef}
+        width={PREVIEW_DIM}
+        height={PREVIEW_DIM}
+        role="img"
+        aria-label={label}
+        className="device-preview"
+      />
+      {error && <p role="alert">{error}</p>}
+    </>
   );
 }
